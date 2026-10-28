@@ -19,3 +19,6 @@
 - [`18-flood-propagation/`](implementation/18-flood-propagation/)
 - [`19-grid-convergence/`](implementation/19-grid-convergence/)
 - [`20-mesh-cache-artifacts/`](implementation/20-mesh-cache-artifacts/)
+- [`21-resident-clock-and-batch-loop/`](implementation/21-resident-clock-and-batch-loop/)
+- [`22-active-set/`](implementation/22-active-set/)
+- [`23-deterministic-accumulation/`](implementation/23-deterministic-accumulation/)

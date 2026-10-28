@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import functools
+import shutil
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -28,6 +31,33 @@ EA_DATASET_ROOT = Path(__file__).resolve().parents[2] / "benchmark_assets"
 requires_ea_dataset = pytest.mark.skipif(
     not EA_DATASET_ROOT.is_dir(),
     reason=f"EA benchmark dataset not present at {EA_DATASET_ROOT}; unpack it to run this test",
+)
+
+
+@functools.cache
+def vulkan_available() -> bool:
+    """True when kp can create a Vulkan device and glslang can compile shaders.
+
+    Probed in a subprocess: without a portability-enabled driver
+    ``kp.Manager()`` can hang or abort rather than raise.
+    """
+    if shutil.which("glslangValidator") is None:
+        return False
+    try:
+        probe = subprocess.run(  # noqa: S603
+            [sys.executable, "-c", "import kp; kp.Manager()"],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return probe.returncode == 0
+
+
+requires_vulkan = pytest.mark.skipif(
+    not vulkan_available(),
+    reason="no Vulkan device (kp.Manager() failed) or no glslang compiler",
 )
 
 _SOLVER_CLASS_BY_MODULE = {

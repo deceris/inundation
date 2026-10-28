@@ -7,6 +7,10 @@ drift between geometry, workflow, Vulkan solver, and benchmarks.
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # ── Geometry (swe_geometry.py) ────────────────────────────────────────────────
 POLYGON_AREA_EPSILON = 1e-30
@@ -27,6 +31,16 @@ REGIME_DRY = 2
 CFL_EPSILON_MIN = 1e-10
 CFL_SANITY_MAX = 1e10
 SIMULATION_TIME_EPSILON = 1e-12
+
+# GPU-resident simulated clock: a uint64 count of 2^-20 s ticks. Every step's dt
+# is a whole number of ticks no larger than 2^24, so float(ticks) * 2^-20 is
+# exact in float32 and the clock advances by exactly the dt the physics used.
+SIM_TICKS_PER_SECOND = 1 << 20
+SIM_DT_MAX_TICKS = 1 << 24
+
+# Active-set block: this many consecutive (Hilbert-ordered) cells, one cell
+# workgroup. The resident kernels hard-code it as local_size_x and ``>> 8``.
+ACTIVE_BLOCK_CELLS = 256
 
 
 # ── Workflow (workflow.py) ────────────────────────────────────────────────────
@@ -57,6 +71,40 @@ def compute_workgroups(
         (math.ceil(e / work_group_size), 1, 1),
         (math.ceil(n / work_group_size), 1, 1),
     )
+
+
+def seconds_to_ticks(seconds: float) -> int:
+    """Simulated time in seconds -> nearest whole tick."""
+    if not math.isfinite(seconds) or seconds < 0.0:
+        raise ValueError(f"simulated time must be finite and non-negative, got {seconds}")
+    return round(seconds * SIM_TICKS_PER_SECOND)
+
+
+def ticks_to_seconds(ticks: int) -> float:
+    """Whole ticks -> simulated time in seconds (float64)."""
+    return ticks / SIM_TICKS_PER_SECOND
+
+
+def dt_to_ticks(dt: float) -> int:
+    """Timestep in seconds -> whole ticks, rounded down so a bound is never exceeded."""
+    if not math.isfinite(dt) or dt <= 0.0:
+        raise ValueError(f"dt must be finite and positive, got {dt}")
+    ticks = math.floor(dt * SIM_TICKS_PER_SECOND)
+    if ticks < 1 or ticks > SIM_DT_MAX_TICKS:
+        raise ValueError(
+            f"dt must be between one tick and {SIM_DT_MAX_TICKS / SIM_TICKS_PER_SECOND} s, got {dt}"
+        )
+    return ticks
+
+
+def output_window_stops(start_ticks: int, end_ticks: int, interval_ticks: int) -> Iterator[int]:
+    """Stop tick of each output window: every interval after the start, then the end."""
+    if interval_ticks <= 0:
+        raise ValueError(f"output interval must be positive, got {interval_ticks} ticks")
+    stop = start_ticks
+    while stop < end_ticks:
+        stop = min(stop + interval_ticks, end_ticks)
+        yield stop
 
 
 def compute_eta_seconds(wall_elapsed: float, t_sim: float, t_offset: float, t_end: float) -> float:

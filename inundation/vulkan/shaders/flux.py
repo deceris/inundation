@@ -190,41 +190,9 @@ void main() {
 
 """
 
-FLUX_DTBUF_GLSL = """\
-#version 450
-#extension GL_EXT_shader_atomic_float : require
-
-layout(local_size_x = 256) in;
-
-layout(set=0, binding=0)  buffer H      { float h[];      };
-layout(set=0, binding=1)  buffer HU     { float hu[];     };
-layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer ZB     { float zb[];     };
-layout(set=0, binding=4)  buffer AREA   { float area[];   };
-layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
-layout(set=0, binding=6)  buffer ENX    { float enx[];    };
-layout(set=0, binding=7)  buffer ENY    { float eny[];    };
-layout(set=0, binding=8)  buffer ECL    { int   ecL[];    };
-layout(set=0, binding=9)  buffer ECR    { int   ecR[];    };
-layout(set=0, binding=10) buffer DH     { float dh[];     };
-layout(set=0, binding=11) buffer DHU    { float dhu[];    };
-layout(set=0, binding=12) buffer DHV    { float dhv[];    };
-layout(set=0, binding=13) buffer H1     { float h1[];     };
-layout(set=0, binding=14) buffer HU1    { float hu1[];    };
-layout(set=0, binding=15) buffer HV1    { float hv1[];    };
-layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
-layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
-layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
-
-layout(push_constant) uniform PC {
-    float num_edges;
-    float dt_unused;
-    float g;
-    float dry_tol;
-    float cfl_number;
-    float stage;
-} pc;
-
+# HLLC Riemann solver shared by the dt-buffer and resident flux kernels. Needs
+# a push-constant block with `g` and `dry_tol`.
+HLLC_GLSL = """\
 float safe_vel(float h_, float hq) {
     return (h_ > pc.dry_tol) ? hq / h_ : 0.0;
 }
@@ -280,6 +248,47 @@ void hllc(float hL, float hqnL, float hqtL,
     else                { Fh = FR_h;  Fhn = FR_hn;  Fht = FR_ht;  }
 }
 
+"""
+
+FLUX_DTBUF_GLSL = (
+    """\
+#version 450
+#extension GL_EXT_shader_atomic_float : require
+
+layout(local_size_x = 256) in;
+
+layout(set=0, binding=0)  buffer H      { float h[];      };
+layout(set=0, binding=1)  buffer HU     { float hu[];     };
+layout(set=0, binding=2)  buffer HV     { float hv[];     };
+layout(set=0, binding=3)  buffer ZB     { float zb[];     };
+layout(set=0, binding=4)  buffer AREA   { float area[];   };
+layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
+layout(set=0, binding=6)  buffer ENX    { float enx[];    };
+layout(set=0, binding=7)  buffer ENY    { float eny[];    };
+layout(set=0, binding=8)  buffer ECL    { int   ecL[];    };
+layout(set=0, binding=9)  buffer ECR    { int   ecR[];    };
+layout(set=0, binding=10) buffer DH     { float dh[];     };
+layout(set=0, binding=11) buffer DHU    { float dhu[];    };
+layout(set=0, binding=12) buffer DHV    { float dhv[];    };
+layout(set=0, binding=13) buffer H1     { float h1[];     };
+layout(set=0, binding=14) buffer HU1    { float hu1[];    };
+layout(set=0, binding=15) buffer HV1    { float hv1[];    };
+layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
+layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
+layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
+
+layout(push_constant) uniform PC {
+    float num_edges;
+    float dt_unused;
+    float g;
+    float dry_tol;
+    float cfl_number;
+    float stage;
+} pc;
+
+"""
+    + HLLC_GLSL
+    + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
     if (eid >= uint(pc.num_edges)) return;
@@ -368,3 +377,4 @@ void main() {
 }
 
 """
+)

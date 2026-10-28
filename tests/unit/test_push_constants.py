@@ -24,14 +24,34 @@ import re
 
 import pytest
 
+from inundation.vulkan.gpu_resident_batch import (
+    StepControlMode,
+    _pc_block_dilate,
+    _pc_block_mark,
+    _pc_cfl_edge_gather,
+    _pc_cfl_gather,
+    _pc_source_resident,
+    _pc_step_control,
+)
+
 # pyright: reportPrivateUsage=false
 from inundation.vulkan.shaders import (
+    BLOCK_DILATE_GLSL,
+    BLOCK_MARK_GLSL,
     CFL_ACCUM_GLSL,
+    CFL_EDGE_GATHER_GLSL,
+    CFL_GATHER_GLSL,
     CFL_REDUCE_GLSL,
     FLUX_DTBUF_GLSL,
     FLUX_GLSL,
+    FLUX_RESIDENT_GATHER_GLSL,
+    FLUX_RESIDENT_GLSL,
+    SOURCE_RESIDENT_GLSL,
+    STEP_CONTROL_GLSL,
     UPDATE_DTBUF_GLSL,
     UPDATE_GLSL,
+    UPDATE_RESIDENT_GATHER_GLSL,
+    UPDATE_RESIDENT_GLSL,
 )
 from inundation.vulkan.solver import (
     _pc_cfl_accum,
@@ -97,7 +117,9 @@ class TestPushConstantFieldParsing:
 class TestUpdatePushConstants:
     """The helper whose ordering bug froze four backends."""
 
-    @pytest.mark.parametrize("glsl", [UPDATE_GLSL, UPDATE_DTBUF_GLSL])
+    @pytest.mark.parametrize(
+        "glsl", [UPDATE_GLSL, UPDATE_DTBUF_GLSL, UPDATE_RESIDENT_GLSL, UPDATE_RESIDENT_GATHER_GLSL]
+    )
     def test_matches_the_shader_struct(self, glsl: str) -> None:
         emitted = _pc_update(int(NUM_ELEMENTS), DT, int(STAGE), G, DRY_TOL, CFL, track_clamp=True)
         assert emitted == expected_layout(glsl)
@@ -132,7 +154,9 @@ class TestUpdatePushConstants:
 
 
 class TestFluxPushConstants:
-    @pytest.mark.parametrize("glsl", [FLUX_GLSL, FLUX_DTBUF_GLSL])
+    @pytest.mark.parametrize(
+        "glsl", [FLUX_GLSL, FLUX_DTBUF_GLSL, FLUX_RESIDENT_GLSL, FLUX_RESIDENT_GATHER_GLSL]
+    )
     def test_matches_the_shader_struct(self, glsl: str) -> None:
         emitted = _pc_flux(int(NUM_ELEMENTS), DT, G, DRY_TOL, CFL, int(STAGE))
         assert emitted == expected_layout(glsl)
@@ -151,3 +175,51 @@ class TestCflPushConstants:
         expected = expected_layout(CFL_REDUCE_GLSL)
         expected[push_constant_fields(CFL_REDUCE_GLSL).index("dt")] = 0.0
         assert emitted == expected
+
+
+class TestResidentPushConstants:
+    @pytest.mark.parametrize("mode", list(StepControlMode))
+    def test_step_control_mode_is_the_only_field(self, mode: StepControlMode) -> None:
+        assert push_constant_fields(STEP_CONTROL_GLSL) == ["mode"]
+        assert _pc_step_control(mode) == [float(mode.value)]
+
+    def test_step_control_modes_match_the_shader_thresholds(self) -> None:
+        # The shader branches on mode < 0.5 (start), < 1.5 (after a step), else
+        # (new window); the enum values must sit inside those bands.
+        assert StepControlMode.START.value < 0.5
+        assert 0.5 < StepControlMode.STEP.value < 1.5
+        assert StepControlMode.RETARGET.value > 1.5
+
+    def test_source_matches_the_shader_struct(self) -> None:
+        assert push_constant_fields(SOURCE_RESIDENT_GLSL) == ["num_sources", "dry_tol"]
+        assert _pc_source_resident(int(NUM_ELEMENTS), DRY_TOL) == [NUM_ELEMENTS, DRY_TOL]
+
+    @pytest.mark.parametrize("all_active", [False, True])
+    def test_block_mark_matches_the_shader_struct(self, all_active: bool) -> None:
+        assert push_constant_fields(BLOCK_MARK_GLSL) == [
+            "num_cells",
+            "num_blocks",
+            "dry_tol",
+            "all_active",
+        ]
+        n_blocks = 77
+        assert _pc_block_mark(int(NUM_ELEMENTS), n_blocks, DRY_TOL, all_active) == [
+            NUM_ELEMENTS,
+            float(n_blocks),
+            DRY_TOL,
+            1.0 if all_active else 0.0,
+        ]
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_block_dilate_matches_the_shader_struct(self, force: bool) -> None:
+        assert push_constant_fields(BLOCK_DILATE_GLSL) == ["num_blocks", "force"]
+        # The shader treats force > 0.5 as set.
+        assert _pc_block_dilate(int(NUM_ELEMENTS), force) == [NUM_ELEMENTS, 1.0 if force else 0.0]
+
+    def test_cfl_edge_gather_matches_the_shader_struct(self) -> None:
+        assert _pc_cfl_edge_gather(int(NUM_ELEMENTS), G, DRY_TOL) == expected_layout(
+            CFL_EDGE_GATHER_GLSL
+        )
+
+    def test_cfl_gather_matches_the_shader_struct(self) -> None:
+        assert _pc_cfl_gather(int(NUM_ELEMENTS), CFL) == expected_layout(CFL_GATHER_GLSL)

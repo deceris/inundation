@@ -75,3 +75,43 @@ intent.
 When set, the artifact takes precedence over `geometry_cache_dir` and
 `mesh_source`, which are then never read; `mesh_source` may be `None`.
 Evidence: [`20-mesh-cache-artifacts/`](../implementation/20-mesh-cache-artifacts/results.md).
+
+## Resident simulated clock: integer ticks
+
+`gpu_resident_batch` keeps simulated time on device as a `uint64_t` count of
+2⁻²⁰ s ticks, and quantizes each step's dt down to whole ticks so the clock
+advances by exactly the dt the physics used. A float64 clock was rejected:
+Apple GPUs under MoltenVK have no `shaderFloat64`, so the reference platform
+could not run it, and even float64 would leave the clock only approximately
+equal to the summed dt. A compensated float32 pair was rejected because it
+depends on the shader compiler not reassociating floating-point arithmetic.
+Evidence: [`21-resident-clock-and-batch-loop/`](../implementation/21-resident-clock-and-batch-loop/plan.md).
+
+## Nysa volume deficit: not the clock or the clamp
+
+With the integer tick clock the Nysa 24 h run still loses 1.26 % of injected
+volume, growing with the wet area, with zero clamp volume. The remaining
+suspect is float32 state arithmetic; it is handled by the float64 or
+compensated-state work, not by further clock changes. Evidence:
+[`21-resident-clock-and-batch-loop/results.md`](../implementation/21-resident-clock-and-batch-loop/results.md).
+
+## Active set: exact block skipping
+
+`gpu_resident_batch` skips 256-cell blocks outside the two-ring of blocks that
+hold water or momentum, recomputed every step. Two cell rings bound what one
+Heun step can change, so results match the full step; there is no
+approximate threshold to tune. Compacted lists were rejected because Kompute
+has no indirect dispatch. Evidence:
+[`22-active-set/results.md`](../implementation/22-active-set/results.md).
+
+## Deterministic accumulation by default
+
+`gpu_resident_batch` sums fluxes and CFL terms per cell in the fixed order of
+the mesh CSR instead of with float `atomicAdd`, so repeated runs are
+bit-identical on one device and driver. This restores the roadmap invariant
+that kernel restructuring preserves per-cell gather order. It is the default
+because it costs nothing: dry edges write nothing and cells with no live edge
+skip the sum, so it is as fast as the atomics on a fully wet mesh and faster
+on Nysa. The atomic path stays behind `deterministic = False` as a fallback.
+Bit-identity across devices or drivers is not claimed. Evidence:
+[`23-deterministic-accumulation/results.md`](../implementation/23-deterministic-accumulation/results.md).

@@ -112,6 +112,9 @@ class WorkflowConfig:
     geometry_cache_source: str | os.PathLike[str] | None = None
     capture_momentum_snapshots: bool = False
     steps_per_graph: int | None = None
+    # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
+    # instead of float atomics. None keeps the backend default (on).
+    deterministic: bool | None = None
     output_every_steps: int | None = None
     solver_impl: Literal[
         "baseline",
@@ -626,6 +629,13 @@ class SWEWorkflow:
         self.solver = solver
         if self.config.track_clamp_mass and hasattr(solver, "track_clamp"):
             solver.track_clamp = True
+        # Only the GPU-resident strategy records multi-step graphs.
+        if self.config.steps_per_graph is not None and isinstance(
+            solver, SWESolverGpuResidentBatch
+        ):
+            solver.steps_per_graph = self.config.steps_per_graph
+        if self.config.deterministic is not None and isinstance(solver, SWESolverGpuResidentBatch):
+            solver.deterministic = self.config.deterministic
 
     def run(self, phases: Sequence[SimulationPhase]) -> WorkflowResult:
         """Execute one or more discharge phases and return simulation outputs."""
