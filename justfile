@@ -89,6 +89,10 @@ benchmark-obstruction *args:
 benchmark-propagation *args:
     {{docker_prefix}} uv run python -m inundation.bench.flood_propagation {{args}}
 
+# Steady flat-channel open-boundary benchmark (inflow + fixed depth).
+benchmark-open-channel *args:
+    {{docker_prefix}} uv run python -m inundation.bench.open_channel {{args}}
+
 # Run the benchmark harnesses and fold logs, metrics, and animations into
 # one self-contained HTML report at .tmp/bench-report/report.html.
 benchmark-report *args:

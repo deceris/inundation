@@ -34,7 +34,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
         g, dt = self._g, self._dry_tol
 
         self._algo_flux_dtbuf = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["flux_dtbuf"],
             workgroup=wg_e,
             spec_consts=[],

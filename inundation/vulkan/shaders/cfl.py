@@ -25,6 +25,7 @@ layout(set=0, binding=15) buffer HV1    { float hv1[];    };
 layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
 layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
+layout(set=0, binding=19) buffer BC     { float bc[];     };
 
 layout(push_constant) uniform PC {
     float num_edges;
@@ -56,7 +57,17 @@ void main() {
         float unR = (hR > pc.dry_tol) ? (hu[cR]*nx_ + hv[cR]*ny_) / hR : 0.0;
         sR = abs(unR) + cWR;
     } else {
-        sR = sL;
+        // Open boundaries: the exterior wave speed, not the mirrored interior.
+        int   bkind = int(bc[4u * eid]);
+        float bval  = bc[4u * eid + 1u];
+        if (bkind == 2) {
+            sR = abs(unL) + sqrt(pc.g * bval);
+        } else if (bkind == 1) {
+            float hf = max(hL, pow(bval * bval / pc.g, 1.0 / 3.0));
+            sR = (hf > pc.dry_tol) ? abs(bval) / hf + sqrt(pc.g * hf) : sL;
+        } else {
+            sR = sL;
+        }
     }
 
     float contrib = max(sL, sR) * len;

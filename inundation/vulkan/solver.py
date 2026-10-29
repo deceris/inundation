@@ -26,6 +26,7 @@ try:
 except ImportError as exc:
     raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
 
+from ..boundary import boundary_table
 from ..tuning import (
     CFL_DEFAULT,
     CFL_EPSILON_MIN,
@@ -37,10 +38,11 @@ from ..tuning import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from numpy.typing import NDArray
 
+    from ..boundary import OpenBoundary
     from ..mesh.geometry import MeshGeometry
 
 
@@ -205,6 +207,10 @@ class SWESolver:
         # enabled. Per-cell rather than one global accumulator so each cell's
         # history stays small enough not to absorb its own increments.
         self.t_clamp_mass = g(np.zeros(self.N, dtype=np.float32))
+        # Per-edge open-boundary table (kind, value, volume out coarse + fine); walls by
+        # default. See inundation/boundary.py and shaders/flux.py.
+        self._bc_table = np.zeros(4 * self.E, dtype=np.float32)
+        self.t_bc = g(self._bc_table)
 
         self._all_tensors = [
             self.t_h,
@@ -232,7 +238,10 @@ class SWESolver:
         # Appending to _all_tensors instead would silently renumber whichever
         # tensor a subclass appends for its own binding 19.
         self._update_tensors = [*self._all_tensors, self.t_clamp_mass]
-        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._update_tensors)).eval()
+        self._flux_tensors = [*self._all_tensors, self.t_bc]
+        self._mgr.sequence().record(
+            kp.OpTensorSyncDevice([*self._update_tensors, self.t_bc])
+        ).eval()
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
         N, E = self.N, self.E
@@ -240,7 +249,7 @@ class SWESolver:
         g, dt = self._g, self._dry_tol
 
         self._algo_flux = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["flux"],
             workgroup=wg_e,
             spec_consts=[],
@@ -274,7 +283,7 @@ class SWESolver:
     ) -> None:
         """Build the CFL accumulation + reduction algorithms (shared by all variants)."""
         self._algo_cfl_accum = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["cfl_accum"],
             workgroup=wg_e,
             spec_consts=[],
@@ -364,6 +373,27 @@ class SWESolver:
     def _reset_to_initial(self) -> None:
         """Restore the initial condition, momentum included, for a fresh run."""
         self.reset(self._h0, self._hu0, self._hv0)
+        # Zero the open-boundary volume accumulators (column 2 is always 0 host-side).
+        self._upload(self.t_bc, self._bc_table)
+
+    def set_open_boundaries(self, open_boundaries: Sequence[OpenBoundary]) -> None:
+        """Validate and upload static open-boundary forcing; unselected edges stay walls.
+
+        Takes effect on the next ``run()``; a non-resumed run also zeroes the
+        boundary volume accumulator.
+        """
+        table = boundary_table(self.geom, open_boundaries).reshape(-1, 2)
+        self._bc_table = np.zeros((self.E, 4), dtype=np.float32)
+        self._bc_table[:, :2] = table
+        self._bc_table = self._bc_table.ravel()
+        self._upload(self.t_bc, self._bc_table)
+
+    def boundary_volume_out_m3(self) -> float:
+        """Net volume [m^3] that left through open boundaries since the last fresh run.
+
+        Negative means net inflow. Walls contribute nothing.
+        """
+        return float(self._download(self.t_bc).reshape(-1, 4)[:, 2:].astype(np.float64).sum())
 
     def reset_clamp_mass(self) -> None:
         """Zero the positivity-clamp accumulator."""

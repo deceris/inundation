@@ -34,7 +34,7 @@ class SWESolverDeviceCfl(SWESolver):
         g, dt = self._g, self._dry_tol
 
         self._algo_flux = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["flux"],
             workgroup=wg_e,
             spec_consts=[],

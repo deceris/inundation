@@ -1,6 +1,52 @@
 """Flux shader sources for SWE solver."""
 
-FLUX_GLSL = """\
+# Shared by both flux variants. Binding 19 holds 4 floats per edge:
+# (kind, value, volume-out coarse + fine sums [m^3]). kind 0 = reflective
+# wall, 1 = prescribed outward unit discharge q_n [m^2/s], 2 = prescribed depth
+# [m]. Only read for boundary edges (cR < 0); see inundation/boundary.py.
+_OPEN_BC_GLSL = """
+layout(set=0, binding=19) buffer BC     { float bc[];     };
+
+// One thread per edge owns its slots, so no atomics. Two-level sum: a long
+// steady run adds ~1e5 tiny increments, which a bare float32 total silently
+// drops once they fall below half an ULP. `fine` stays small, so increments
+// keep full precision; it is folded into `coarse` once it reaches 2^-12 of
+// it. Kahan would be shorter, but fast-math (MoltenVK's default) folds its
+// (t - s) - y to zero, and `precise` makes the whole shader ~50 % slower.
+void accumulate_volume(uint eid, float dv) {
+    float coarse = bc[4u * eid + 2u];
+    float fine   = bc[4u * eid + 3u] + dv;
+    if (abs(fine) >= abs(coarse) * (1.0 / 4096.0)) {
+        bc[4u * eid + 2u] = coarse + fine;
+        fine = 0.0;
+    }
+    bc[4u * eid + 3u] = fine;
+}
+
+// Prescribed normal discharge: the mass flux is imposed exactly (no Riemann
+// solve). Outflow (q >= 0) upwinds the interior state and is capped at the
+// volume the cell holds this stage; inflow (q < 0) enters normal to the edge
+// at max(interior depth, critical depth), so a dry cell can be filled.
+void discharge_flux(float hL, float hqtL, float q, float q_cap,
+                    out float Fh, out float Fhn, out float Fht)
+{
+    if (q >= 0.0) {
+        float qo = min(q, q_cap);
+        float un = (hL > pc.dry_tol) ? qo / hL : 0.0;
+        Fh  = qo;
+        Fhn = qo * un + 0.5 * pc.g * hL * hL;
+        Fht = qo * safe_vel(hL, hqtL);
+    } else {
+        float hf = max(hL, pow(q * q / pc.g, 1.0 / 3.0));
+        Fh  = q;
+        Fhn = q * q / hf + 0.5 * pc.g * hf * hf;
+        Fht = 0.0;
+    }
+}
+"""
+
+FLUX_GLSL = (
+    """\
 #version 450
 #extension GL_EXT_shader_atomic_float : require
 
@@ -90,7 +136,9 @@ void hllc(float hL, float hqnL, float hqtL,
     else if (SR >= 0.0) { Fh = FsR_h; Fhn = FsR_hn; Fht = FsR_ht; }
     else                { Fh = FR_h;  Fhn = FR_hn;  Fht = FR_ht;  }
 }
-
+"""
+    + _OPEN_BC_GLSL
+    + """
 void main() {
     uint eid = gl_GlobalInvocationID.x;
     if (eid >= uint(pc.num_edges)) return;
@@ -100,10 +148,19 @@ void main() {
     float nx_ = enx[eid];
     float ny_ = eny[eid];
     float len = elen[eid];
+    int   bkind = 0;
+    float bval  = 0.0;
+    if (cR < 0) {
+        bkind = int(bc[4u * eid]);
+        bval  = bc[4u * eid + 1u];
+    }
 
-    // Early exit: skip fully-dry edges (both sides below dry tolerance)
+    // Early exit: skip fully-dry edges (both sides below dry tolerance).
+    // An open boundary's exterior is the prescribed depth, or "wet" for inflow.
     float hL_check = (pc.stage < 0.5) ? h[cL] : h1[cL];
-    float hR_check = (cR >= 0) ? ((pc.stage < 0.5) ? h[cR] : h1[cR]) : hL_check;
+    float hR_check = (cR >= 0) ? ((pc.stage < 0.5) ? h[cR] : h1[cR])
+                   : (bkind == 2) ? bval
+                   : (bkind == 1 && bval < 0.0) ? 1.0 : hL_check;
     if (hL_check < pc.dry_tol && hR_check < pc.dry_tol) return;
 
     // Read from predictor state (h1/hu1/hv1) in stage 2
@@ -120,10 +177,17 @@ void main() {
     float zbL = zb[cL];
 
     float hR, huR, hvR, zbR;
-    if (cR < 0) {
+    if (cR < 0 && bkind == 2) {
+        // Fixed-depth ghost state, interior velocity (not a characteristic BC).
+        hR  = bval;
+        huR = bval * safe_vel(hL, huL);
+        hvR = bval * safe_vel(hL, hvL);
+        zbR = zbL;
+    } else if (cR < 0) {
         // Wall (reflective) BC: mirror the left state with negated normal velocity.
         // The HLLC solver sees identical depths on both sides and zero net normal
-        // flux, so no mass crosses the domain boundary.
+        // flux, so no mass crosses the domain boundary. Discharge edges reuse it
+        // only for the (zero) hydrostatic correction; their flux is set below.
         hR  = hL;
         huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
         hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
@@ -161,7 +225,11 @@ void main() {
     float hqtR = -huRs * ny_ + hvRs * nx_;
 
     float Fh, Fhn, Fht;
-    hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht);
+    if (bkind == 1) {
+        discharge_flux(hLs, hqtL, bval, hLs * area[cL] / (len * max(pc.dt, 1e-30)), Fh, Fhn, Fht);
+    } else {
+        hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht);
+    }
 
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
@@ -185,12 +253,18 @@ void main() {
         atomicAdd(dh[cR],  -Fh  * len);
         atomicAdd(dhu[cR], -Fhu * len - SR_g * nx_ * len);
         atomicAdd(dhv[cR], -Fhv * len - SR_g * ny_ * len);
+    } else if (bkind != 0) {
+        // Half-dt per Heun
+        // stage sums to exactly the volume the corrector average removes.
+        accumulate_volume(eid, 0.5 * pc.dt * Fh * len);
     }
 }
 
 """
+)
 
-FLUX_DTBUF_GLSL = """\
+FLUX_DTBUF_GLSL = (
+    """\
 #version 450
 #extension GL_EXT_shader_atomic_float : require
 
@@ -279,7 +353,9 @@ void hllc(float hL, float hqnL, float hqtL,
     else if (SR >= 0.0) { Fh = FsR_h; Fhn = FsR_hn; Fht = FsR_ht; }
     else                { Fh = FR_h;  Fhn = FR_hn;  Fht = FR_ht;  }
 }
-
+"""
+    + _OPEN_BC_GLSL
+    + """
 void main() {
     uint eid = gl_GlobalInvocationID.x;
     if (eid >= uint(pc.num_edges)) return;
@@ -289,9 +365,18 @@ void main() {
     float nx_ = enx[eid];
     float ny_ = eny[eid];
     float len = elen[eid];
+    float dt  = dt_buf[0];
+    int   bkind = 0;
+    float bval  = 0.0;
+    if (cR < 0) {
+        bkind = int(bc[4u * eid]);
+        bval  = bc[4u * eid + 1u];
+    }
 
     float hL_check = (pc.stage < 0.5) ? h[cL] : h1[cL];
-    float hR_check = (cR >= 0) ? ((pc.stage < 0.5) ? h[cR] : h1[cR]) : hL_check;
+    float hR_check = (cR >= 0) ? ((pc.stage < 0.5) ? h[cR] : h1[cR])
+                   : (bkind == 2) ? bval
+                   : (bkind == 1 && bval < 0.0) ? 1.0 : hL_check;
     if (hL_check < pc.dry_tol && hR_check < pc.dry_tol) return;
 
     float hL, huL, hvL;
@@ -307,7 +392,12 @@ void main() {
     float zbL = zb[cL];
 
     float hR, huR, hvR, zbR;
-    if (cR < 0) {
+    if (cR < 0 && bkind == 2) {
+        hR  = bval;
+        huR = bval * safe_vel(hL, huL);
+        hvR = bval * safe_vel(hL, hvL);
+        zbR = zbL;
+    } else if (cR < 0) {
         hR  = hL;
         huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
         hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
@@ -345,7 +435,11 @@ void main() {
     float hqtR = -huRs * ny_ + hvRs * nx_;
 
     float Fh, Fhn, Fht;
-    hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht);
+    if (bkind == 1) {
+        discharge_flux(hLs, hqtL, bval, hLs * area[cL] / (len * max(dt, 1e-30)), Fh, Fhn, Fht);
+    } else {
+        hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht);
+    }
 
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
@@ -364,7 +458,10 @@ void main() {
         atomicAdd(dh[cR],  -Fh  * len);
         atomicAdd(dhu[cR], -Fhu * len - SR_g * nx_ * len);
         atomicAdd(dhv[cR], -Fhv * len - SR_g * ny_ * len);
+    } else if (bkind != 0) {
+        accumulate_volume(eid, 0.5 * dt * Fh * len);
     }
 }
 
 """
+)

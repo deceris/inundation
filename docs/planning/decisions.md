@@ -75,3 +75,16 @@ intent.
 When set, the artifact takes precedence over `geometry_cache_dir` and
 `mesh_source`, which are then never read; `mesh_source` may be `None`.
 Evidence: [`20-mesh-cache-artifacts/`](../implementation/20-mesh-cache-artifacts/results.md).
+
+## Open boundaries: direct discharge flux, runtime masks
+
+A prescribed-discharge edge sets the mass flux to the requested value instead
+of constructing a ghost state for HLLC: HLLC does not return an exact mass
+flux, so a ghost state would break the boundary mass balance. Outflow is capped
+at the cell's stage volume, so the positivity clamp never creates mass.
+Prescribed depth is a fixed-depth ghost state with interior velocity. It is
+accepted as partially reflective; a characteristic condition is deferred.
+Edge masks are runtime arguments to `SWEWorkflow.run()`, not
+`WorkflowConfig` fields or geometry/cache fields, because Hilbert reordering
+permutes edges and masks can only be built against the prepared geometry.
+Evidence: [`21-open-boundaries/`](../implementation/21-open-boundaries/results.md).

@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
+    from .boundary import OpenBoundary
     from .vulkan.async_sync_window import SWESolverAsyncSyncWindow
     from .vulkan.baseline import SWESolverBaseline
     from .vulkan.batched_submit import SWESolverBatchedSubmit
@@ -175,6 +176,9 @@ class WorkflowResult:
     # Volume created by the update kernel's positivity clamp over the run.
     # None unless config.track_clamp_mass is enabled.
     clamp_mass_m3: float | None = None
+    # Net volume that left through open boundaries [m^3]; negative = net
+    # inflow. Separate from volume_injected_m3, which counts point sources only.
+    volume_boundary_out_m3: float = 0.0
 
 
 def _point_in_polygon(point: NDArray[np.float64], polygon: NDArray[np.float64]) -> bool:
@@ -627,8 +631,17 @@ class SWEWorkflow:
         if self.config.track_clamp_mass and hasattr(solver, "track_clamp"):
             solver.track_clamp = True
 
-    def run(self, phases: Sequence[SimulationPhase]) -> WorkflowResult:
-        """Execute one or more discharge phases and return simulation outputs."""
+    def run(
+        self,
+        phases: Sequence[SimulationPhase],
+        open_boundaries: Sequence[OpenBoundary] = (),
+    ) -> WorkflowResult:
+        """Execute one or more discharge phases and return simulation outputs.
+
+        ``open_boundaries`` apply for the whole run. Their edge masks index
+        ``self.geom`` (solver order, after any Hilbert reorder), so build them
+        after ``prepare()``.
+        """
         if self.geom is None:
             raise RuntimeError("Workflow not prepared. Call prepare() first.")
         if self.solver is None:
@@ -637,6 +650,7 @@ class SWEWorkflow:
         if not phases:
             raise ValueError("At least one phase is required.")
 
+        self.solver.set_open_boundaries(open_boundaries)
         area = self.geom.area
         valid_cell = area > self.config.area_tol
 
@@ -745,6 +759,7 @@ class SWEWorkflow:
             if hv_snapshots and len(hv_snapshots) == len(snapshots)
             else None,
             clamp_mass_m3=clamp_mass_m3,
+            volume_boundary_out_m3=self.solver.boundary_volume_out_m3(),
         )
 
 

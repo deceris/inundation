@@ -11,3 +11,4 @@
 | Flood propagation | passing | Arrival, depth, speed, and isotropy gates pass; mass drift is a single signed error and the clamp contributes zero | [`18-flood-propagation/`](18-flood-propagation/results.md) |
 | Grid convergence | done | Expected profile order; front bias is discretization error; mass drift changes sign and the clamp contributes zero | [`19-grid-convergence/`](19-grid-convergence/results.md) |
 | Mesh geometry cache artifacts | done | 4000-cell mesh: artifact reloads identical to a direct build; `prepare()` runs with the mesh file deleted (GPU allocation untested — no Vulkan device in the dev container) | [`20-mesh-cache-artifacts/`](20-mesh-cache-artifacts/results.md) |
+| Open-boundary forcing | passing | Steady flat channel: `hu` within 1.4e-3 of the prescribed inflow, mass balance 2.5e-6; wall-only runs unchanged, no measurable slowdown | [`21-open-boundaries/`](21-open-boundaries/results.md) |

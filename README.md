@@ -227,9 +227,22 @@ error. Validate source locations against the mesh in the calling application
 before running. `volume_injected_m3` is calculated from the requested source
 schedule, so it can include discharge from a source that selected no cells.
 
-The public workflow API currently represents inflow with volumetric point
-sources. It does not expose explicit open-boundary forcing. Mesh boundaries
-use the solver's wall treatment.
+Open boundaries are passed to `SWEWorkflow.run(phases, open_boundaries=[...])`
+as `inundation.OpenBoundary(edge_mask, kind, value)`. Every boundary edge not
+selected stays a reflective wall. The masks have shape `(geom.E,)` and index
+`workflow.geom` after `prepare()`, because the Hilbert reorder permutes edges.
+Select edges with `geom.edge_cellR == -1` plus the outward normal
+`edge_nx`/`edge_ny`, or with edge positions.
+
+- `kind="discharge"`: `value` is the unit discharge along the **outward**
+  normal [m²/s]. Negative values are inflow; each edge carries
+  `value * edge_len` m³/s. Outflow is capped at what the boundary cell holds.
+- `kind="depth"`: `value` is the exterior depth [m] above the adjacent bed.
+  This is a simple fixed-depth ghost state, not a non-reflecting condition.
+
+Values are constant for the whole run. `WorkflowResult.volume_boundary_out_m3`
+reports the net volume that left through open boundaries (negative means net
+inflow). `volume_injected_m3` still counts point sources only.
 
 `dt_max` is the maximum numerical timestep, not the snapshot interval.
 `output_interval_s` controls depth snapshot timing. `cfl_interval` controls how
