@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
+from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_source, _pc_update
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -131,9 +131,7 @@ class SWESolverBatchedSubmit(SWESolver):
             )
 
             if use_gpu_source:
-                step_seq.record(
-                    kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(dt)])
-                )
+                step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), _pc_source(N, dt)))
             step_seq.eval()
 
             if not use_gpu_source:

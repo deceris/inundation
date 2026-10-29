@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import re
 
+import numpy as np
 import pytest
 
+from inundation.tuning import uint_as_float_bits
 from inundation.vulkan.gpu_resident_batch import (
     StepControlMode,
     _pc_block_dilate,
@@ -59,11 +61,14 @@ from inundation.vulkan.solver import (
     _pc_cfl_accum,
     _pc_cfl_reduce,
     _pc_flux,
+    _pc_source,
     _pc_update,
 )
 
 # Distinct sentinel per semantic field, so a swap cannot coincidentally pass.
 NUM_ELEMENTS = 11.0
+# Counts are pushed as the float whose bit pattern they are (uint in GLSL).
+COUNT_BITS = uint_as_float_bits(int(NUM_ELEMENTS))
 DT = 22.0
 G = 33.0
 DRY_TOL = 44.0
@@ -75,8 +80,8 @@ TRACK_CLAMP = 1.0
 # count fields and the unused-dt alias are spelled differently across shaders
 # but carry the same argument.
 FIELD_VALUES = {
-    "num_edges": NUM_ELEMENTS,
-    "num_cells": NUM_ELEMENTS,
+    "num_edges": COUNT_BITS,
+    "num_cells": COUNT_BITS,
     "dt": DT,
     "dt_unused": DT,
     "g": G,
@@ -87,12 +92,24 @@ FIELD_VALUES = {
 }
 
 
-def push_constant_fields(glsl_src: str) -> list[str]:
-    """Field names of the ``push_constant`` block, in declaration order."""
+def push_constant_block(glsl_src: str) -> str:
     block = re.search(r"layout\(push_constant\)\s+uniform\s+\w+\s*\{(.*?)\}", glsl_src, re.DOTALL)
     if block is None:
         raise AssertionError("no push_constant block found")
-    return re.findall(r"\bfloat\s+(\w+)\s*;", block.group(1))
+    return block.group(1)
+
+
+def push_constant_fields(glsl_src: str) -> list[str]:
+    """Field names of the ``push_constant`` block, in declaration order."""
+    return re.findall(r"\b(?:float|uint)\s+(\w+)\s*;", push_constant_block(glsl_src))
+
+
+def push_constant_types(glsl_src: str) -> dict[str, str]:
+    """Field name -> GLSL type of the ``push_constant`` block."""
+    return {
+        name: kind
+        for kind, name in re.findall(r"\b(float|uint)\s+(\w+)\s*;", push_constant_block(glsl_src))
+    }
 
 
 def expected_layout(glsl_src: str) -> list[float]:
@@ -110,6 +127,10 @@ class TestPushConstantFieldParsing:
             "stage",
             "track_clamp",
         ]
+
+    def test_reads_uint_fields_too(self) -> None:
+        assert push_constant_types(UPDATE_GLSL)["num_cells"] == "uint"
+        assert push_constant_types(UPDATE_GLSL)["dt"] == "float"
 
     def test_rejects_source_without_a_push_constant_block(self) -> None:
         with pytest.raises(AssertionError, match="no push_constant block"):
@@ -208,7 +229,7 @@ class TestResidentPushConstants:
             "compensate",
         ]
         assert _pc_source_resident(int(NUM_ELEMENTS), DRY_TOL, compensate) == [
-            NUM_ELEMENTS,
+            COUNT_BITS,
             DRY_TOL,
             1.0 if compensate else 0.0,
         ]
@@ -223,8 +244,8 @@ class TestResidentPushConstants:
         ]
         n_blocks = 77
         assert _pc_block_mark(int(NUM_ELEMENTS), n_blocks, DRY_TOL, all_active) == [
-            NUM_ELEMENTS,
-            float(n_blocks),
+            COUNT_BITS,
+            uint_as_float_bits(n_blocks),
             DRY_TOL,
             1.0 if all_active else 0.0,
         ]
@@ -233,7 +254,7 @@ class TestResidentPushConstants:
     def test_block_dilate_matches_the_shader_struct(self, force: bool) -> None:
         assert push_constant_fields(BLOCK_DILATE_GLSL) == ["num_blocks", "force"]
         # The shader treats force > 0.5 as set.
-        assert _pc_block_dilate(int(NUM_ELEMENTS), force) == [NUM_ELEMENTS, 1.0 if force else 0.0]
+        assert _pc_block_dilate(int(NUM_ELEMENTS), force) == [COUNT_BITS, 1.0 if force else 0.0]
 
     def test_cfl_edge_gather_matches_the_shader_struct(self) -> None:
         assert _pc_cfl_edge_gather(int(NUM_ELEMENTS), G, DRY_TOL) == expected_layout(
@@ -242,3 +263,64 @@ class TestResidentPushConstants:
 
     def test_cfl_gather_matches_the_shader_struct(self) -> None:
         assert _pc_cfl_gather(int(NUM_ELEMENTS), CFL) == expected_layout(CFL_GATHER_GLSL)
+
+
+ALL_SHADERS = [
+    FLUX_GLSL,
+    FLUX_DTBUF_GLSL,
+    UPDATE_GLSL,
+    UPDATE_DTBUF_GLSL,
+    CFL_ACCUM_GLSL,
+    CFL_REDUCE_GLSL,
+    FLUX_RESIDENT_GLSL,
+    FLUX_RESIDENT_GATHER_GLSL,
+    UPDATE_RESIDENT_GLSL,
+    UPDATE_RESIDENT_GATHER_GLSL,
+    UPDATE_RESIDENT_COMP_GLSL,
+    UPDATE_RESIDENT_GATHER_COMP_GLSL,
+    CFL_EDGE_GATHER_GLSL,
+    CFL_GATHER_GLSL,
+    SOURCE_RESIDENT_GLSL,
+    BLOCK_MARK_GLSL,
+    BLOCK_DILATE_GLSL,
+]
+
+
+class TestCounts:
+    """Element counts must survive above 2^24, where a float value rounds."""
+
+    BIG = 2**24 + 1
+
+    @staticmethod
+    def _decode(word: float) -> int:
+        return int(np.array([word], dtype=np.float32).view(np.uint32)[0])
+
+    def test_bits_round_trip_a_count_a_float_value_cannot(self) -> None:
+        assert float(np.float32(self.BIG)) != self.BIG
+        assert self._decode(uint_as_float_bits(self.BIG)) == self.BIG
+
+    def test_helpers_carry_large_counts(self) -> None:
+        assert self._decode(_pc_flux(self.BIG, DT, G, DRY_TOL, CFL, 0)[0]) == self.BIG
+        assert self._decode(_pc_update(self.BIG, DT, 0, G, DRY_TOL, CFL)[0]) == self.BIG
+        assert self._decode(_pc_cfl_accum(self.BIG, G, DRY_TOL, CFL)[0]) == self.BIG
+        assert self._decode(_pc_cfl_reduce(self.BIG, G, DRY_TOL, CFL)[0]) == self.BIG
+        assert self._decode(_pc_source(self.BIG, DT)[0]) == self.BIG
+        assert self._decode(_pc_source_resident(self.BIG, DRY_TOL, True)[0]) == self.BIG
+        assert self._decode(_pc_cfl_edge_gather(self.BIG, G, DRY_TOL)[0]) == self.BIG
+        assert self._decode(_pc_cfl_gather(self.BIG, CFL)[0]) == self.BIG
+        marks = _pc_block_mark(self.BIG, self.BIG - 1, DRY_TOL, True)
+        assert (self._decode(marks[0]), self._decode(marks[1])) == (self.BIG, self.BIG - 1)
+        assert self._decode(_pc_block_dilate(self.BIG, False)[0]) == self.BIG
+
+    @pytest.mark.parametrize("glsl", ALL_SHADERS)
+    def test_every_count_field_is_declared_uint(self, glsl: str) -> None:
+        types = push_constant_types(glsl)
+        counts = {name: kind for name, kind in types.items() if name.startswith("num_")}
+        assert counts, "no count field"
+        assert set(counts.values()) == {"uint"}
+
+    def test_rejects_counts_outside_32_bits(self) -> None:
+        with pytest.raises(ValueError, match="32 bits"):
+            uint_as_float_bits(2**32)
+        with pytest.raises(ValueError, match="32 bits"):
+            uint_as_float_bits(-1)

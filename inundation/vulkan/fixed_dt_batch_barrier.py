@@ -28,7 +28,7 @@ import kp
 import numpy as np
 
 from .fixed_dt_batch import SWESolverFixedDtBatch
-from .solver import _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
+from .solver import _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_source, _pc_update
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -203,7 +203,7 @@ class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
                 step_seq.record(self._barrier_state)
                 if use_gpu_source:
                     step_seq.record(
-                        kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(step_dt)])
+                        kp.OpAlgoDispatch(self._require_algo_source(), _pc_source(N, step_dt))
                     )
                     step_seq.record(self._barrier_state)
             step_seq.eval()

@@ -9,13 +9,13 @@ layout(set=0, binding=0) buffer H   { float h[];   };
 layout(set=0, binding=1) buffer SRC { float src[]; };
 
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float dt;
 } pc;
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
     float s = src[i];
     if (s != 0.0) {
         h[i] = max(h[i] + pc.dt * s, 0.0);
@@ -51,13 +51,13 @@ layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 layout(set=0, binding=19) buffer SRC    { float src[]; };
 
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float _pad0;
 } pc;
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
     float s = src[i];
     float dt = dt_buf[0];
     if (s != 0.0) {

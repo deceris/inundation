@@ -36,20 +36,15 @@ DEFAULT_OUTPUT_ROOT = ".tmp/inundation-metal-bench"
 AVAILABLE_SOLVER_IMPLS = (
     "batched_submit",
     "async_sync_window",
-    "fixed_dt_batch",
     "gpu_resident_batch",
 )
-DEFAULT_SOLVER_IMPLS = ("batched_submit", "fixed_dt_batch")
-ComparedSolver = Literal[
-    "batched_submit", "async_sync_window", "fixed_dt_batch", "gpu_resident_batch"
-]
+DEFAULT_SOLVER_IMPLS = ("batched_submit", "gpu_resident_batch")
+ComparedSolver = Literal["batched_submit", "async_sync_window", "gpu_resident_batch"]
 
 
 def _run_once(
     mesh_path: Path,
-    solver_impl: Literal[
-        "baseline", "batched_submit", "async_sync_window", "fixed_dt_batch", "gpu_resident_batch"
-    ],
+    solver_impl: Literal["baseline", "batched_submit", "async_sync_window", "gpu_resident_batch"],
     run_index: int,
     solver_progress: bool,
     phase_duration_s: float,
@@ -86,9 +81,7 @@ def _run_once(
 
 def _run_group(
     mesh_path: Path,
-    solver_impl: Literal[
-        "baseline", "batched_submit", "async_sync_window", "fixed_dt_batch", "gpu_resident_batch"
-    ],
+    solver_impl: Literal["baseline", "batched_submit", "async_sync_window", "gpu_resident_batch"],
     repeats: int,
     warmup: int,
     output_dir: Path,

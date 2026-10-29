@@ -47,6 +47,7 @@ from ..tuning import (
     output_window_stops,
     seconds_to_ticks,
     ticks_to_seconds,
+    uint_as_float_bits,
 )
 from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
 
@@ -90,24 +91,32 @@ def _pc_step_control(mode: StepControlMode) -> list[float]:
     return [float(mode.value)]
 
 
+# Counts travel as the float whose bits they are (uint in the shaders).
+
+
 def _pc_source_resident(num_sources: int, dry_tol: float, compensate: bool) -> list[float]:
-    return [float(num_sources), dry_tol, 1.0 if compensate else 0.0]
+    return [uint_as_float_bits(num_sources), dry_tol, 1.0 if compensate else 0.0]
 
 
 def _pc_block_mark(nc: int, n_blocks: int, dry_tol: float, all_active: bool) -> list[float]:
-    return [float(nc), float(n_blocks), dry_tol, 1.0 if all_active else 0.0]
+    return [
+        uint_as_float_bits(nc),
+        uint_as_float_bits(n_blocks),
+        dry_tol,
+        1.0 if all_active else 0.0,
+    ]
 
 
 def _pc_block_dilate(n_blocks: int, force: bool) -> list[float]:
-    return [float(n_blocks), 1.0 if force else 0.0]
+    return [uint_as_float_bits(n_blocks), 1.0 if force else 0.0]
 
 
 def _pc_cfl_edge_gather(ne: int, g: float, dry_tol: float) -> list[float]:
-    return [float(ne), g, dry_tol]
+    return [uint_as_float_bits(ne), g, dry_tol]
 
 
 def _pc_cfl_gather(nc: int, cfl: float) -> list[float]:
-    return [float(nc), cfl]
+    return [uint_as_float_bits(nc), cfl]
 
 
 # Flag words per block in the active-set buffer: wet, active.

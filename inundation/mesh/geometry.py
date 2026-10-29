@@ -25,6 +25,7 @@ from numpy.typing import NDArray
 from ..tuning import (
     EDGE_LENGTH_EPSILON,
     FACE_NDIM,
+    MIN_CELL_AREA,
     POLYGON_AREA_EPSILON,
     POLYGON_CENTROID_EPSILON,
 )
@@ -289,6 +290,15 @@ def build_geometry(
                 cell_verts = cell_verts[::-1]
             area[ci] = np.float32(max(sa, 1e-30))
             centroid[ci] = _polygon_centroid(cell_verts, sa)
+    # A sliver below the CFL kernels' area floor gets no dt bound, so the first
+    # drop of water in it divides by its area and the run ends in NaN. Refuse
+    # the mesh instead.
+    slivers = np.flatnonzero(area <= MIN_CELL_AREA)
+    if slivers.size:
+        raise ValueError(
+            f"{slivers.size} cell(s) have area <= {MIN_CELL_AREA} m^2 "
+            f"(first: {slivers[:5].tolist()}); merge or remove degenerate cells"
+        )
     cell_vertex_ptr = np.asarray(face_offsets, dtype=np.int32).copy()
     cell_vertices = verts[faces].astype(np.float32, copy=True)
     cell_bbox = np.column_stack(

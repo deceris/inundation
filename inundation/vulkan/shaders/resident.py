@@ -135,7 +135,7 @@ def _flux_resident(gather: bool) -> str:
         + (_GATHER_BINDINGS if gather else "")
         + """
 layout(push_constant) uniform PC {
-    float num_edges;
+    uint  num_edges;
     float dt_unused;
     float g;
     float dry_tol;
@@ -167,7 +167,7 @@ void load_state(int c, out float h_, out float hu_, out float hv_) {
 
 void main() {
     uint eid = gl_GlobalInvocationID.x;
-    if (eid >= uint(pc.num_edges)) return;
+    if (eid >= pc.num_edges) return;
     if (dt_buf_u[0] == 0u) return;
 
     // Skip the workgroup unless one of its left-cell blocks is active.
@@ -376,7 +376,7 @@ def _update_resident(gather: bool, compensated: bool = False) -> str:
 layout(set=0, binding=19) buffer CLAMPM { float clamp_mass[]; };
 
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float dt_unused;
     float g;
     float dry_tol;
@@ -390,7 +390,7 @@ layout(push_constant) uniform PC {
         + """
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
     if (dt_buf_u[0] == 0u) return;
     // One workgroup is one block.
     uint b = gl_WorkGroupID.x;
@@ -497,7 +497,7 @@ layout(local_size_x = 256) in;
     + _GATHER_BINDINGS
     + """\
 layout(push_constant) uniform PC {
-    float num_edges;
+    uint  num_edges;
     float g;
     float dry_tol;
 } pc;
@@ -507,7 +507,7 @@ layout(push_constant) uniform PC {
     + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
-    if (eid >= uint(pc.num_edges)) return;
+    if (eid >= pc.num_edges) return;
     int cL = ecL[eid];
     int cR = ecR[eid];
     float nx_ = enx[eid];
@@ -546,13 +546,13 @@ layout(local_size_x = 256) in;
     + _GATHER_BINDINGS
     + """\
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float cfl_number;
 } pc;
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
     float lam = 0.0;
     for (uint k = cptr[i]; k < cptr[i + 1u]; ++k) {
         lam += ef[EF_WORDS * (cidx[k] >> 1) + EF_CFL];
@@ -584,7 +584,7 @@ layout(set=0, binding=19) buffer SRC    { uint src_u[]; };
 layout(set=0, binding=24) buffer HLO    { float h_lo[]; };
 
 layout(push_constant) uniform PC {
-    float num_sources;
+    uint  num_sources;
     float dry_tol;
     float compensate;
 } pc;
@@ -594,7 +594,7 @@ layout(push_constant) uniform PC {
     + """
 void main() {
     uint k = gl_GlobalInvocationID.x;
-    if (k >= uint(pc.num_sources)) return;
+    if (k >= pc.num_sources) return;
     if (dt_buf_u[0] == 0u) return;
     uint i = src_u[2u * k];
     float s = uintBitsToFloat(src_u[2u * k + 1u]);
@@ -630,22 +630,22 @@ layout(local_size_x = 64) in;
     + _ACTIVE_BINDINGS
     + """\
 layout(push_constant) uniform PC {
-    float num_cells;
-    float num_blocks;
+    uint  num_cells;
+    uint  num_blocks;
     float dry_tol;
     float all_active;
 } pc;
 
 void main() {
     uint b = gl_GlobalInvocationID.x;
-    if (b >= uint(pc.num_blocks)) return;
+    if (b >= pc.num_blocks) return;
     if (pc.all_active > 0.5) {
         blk[BLK_WORDS * b + BLK_WET] = 0u;
         blk[BLK_WORDS * b + BLK_ACTIVE] = 1u;
         return;
     }
     uint first = b << 8;
-    uint last = min(first + 256u, uint(pc.num_cells));
+    uint last = min(first + 256u, pc.num_cells);
     uint live = 0u;
     for (uint i = first; i < last; ++i) {
         if (h[i] >= pc.dry_tol || hu[i] != 0.0 || hv[i] != 0.0) { live = 1u; break; }
@@ -670,13 +670,13 @@ layout(local_size_x = 64) in;
     + _ACTIVE_BINDINGS
     + """\
 layout(push_constant) uniform PC {
-    float num_blocks;
+    uint  num_blocks;
     float force;
 } pc;
 
 void main() {
     uint b = gl_GlobalInvocationID.x;
-    if (b >= uint(pc.num_blocks)) return;
+    if (b >= pc.num_blocks) return;
     if (pc.force < 0.5 && dt_buf_u[0] == 0u) return;
     uint v = blk[BLK_WORDS * b + BLK_WET];
     for (uint k = bptr[b]; v == 0u && k < bptr[b + 1u]; ++k) {

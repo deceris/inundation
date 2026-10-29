@@ -35,10 +35,15 @@ from ..tuning import (
     GRAVITY_G,
     SIMULATION_TIME_EPSILON,
     compute_workgroups,
+    uint_as_float_bits,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from numpy.typing import NDArray
+
+    from ..mesh.geometry import MeshGeometry
 
 # MoltenVK compiles shaders with Metal fast math unless told otherwise, and its
 # on-demand mode (1.4.2) does not honour the GLSL `precise` qualifier: the
@@ -53,18 +58,18 @@ _MOLTENVK_FAST_MATH_VAR = "MVK_CONFIG_FAST_MATH_ENABLED"
 def _disable_moltenvk_fast_math() -> None:
     os.environ.setdefault(_MOLTENVK_FAST_MATH_VAR, "0")
 
-    from numpy.typing import NDArray
-
-    from ..mesh.geometry import MeshGeometry
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Push-constant helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# Counts travel as the float whose bits they are (the shaders declare them
+# uint): a float *value* is exact only up to 2^24 elements.
+
+
 def _pc_flux(ne: int, dt: float, g: float, dry_tol: float, cfl: float, stage: int) -> list[float]:
-    return [float(ne), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
+    return [uint_as_float_bits(ne), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
 
 
 def _pc_update(
@@ -74,7 +79,7 @@ def _pc_update(
     # {num_cells, dt, g, dry_tol, cfl_number, stage, track_clamp}, which is not
     # the argument order — `stage` is declared second-to-last in the shader.
     return [
-        float(nc),
+        uint_as_float_bits(nc),
         float(dt),
         float(g),
         float(dry_tol),
@@ -85,11 +90,16 @@ def _pc_update(
 
 
 def _pc_cfl_accum(ne: int, g: float, dry_tol: float, cfl: float) -> list[float]:
-    return [float(ne), 0.0, float(g), float(dry_tol), float(cfl)]
+    return [uint_as_float_bits(ne), 0.0, float(g), float(dry_tol), float(cfl)]
 
 
 def _pc_cfl_reduce(nc: int, g: float, dry_tol: float, cfl: float) -> list[float]:
-    return [float(nc), 0.0, float(g), float(dry_tol), float(cfl)]
+    return [uint_as_float_bits(nc), 0.0, float(g), float(dry_tol), float(cfl)]
+
+
+def _pc_source(nc: int, dt: float) -> list[float]:
+    """Host-driven source kernels: {num_cells, dt} (dt unused by the dtbuf variant)."""
+    return [uint_as_float_bits(nc), float(dt)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,7 +344,7 @@ class SWESolver:
             source_spv,
             workgroup=wg_c,
             spec_consts=[],
-            push_consts=[float(N), 0.0],
+            push_consts=_pc_source(N, 0.0),
         )
 
     def _upload(self, tensor: kp.Tensor, arr: NDArray[np.float32]) -> None:  # pyright: ignore[reportAttributeAccessIssue]
@@ -576,7 +586,7 @@ class SWESolver:
             # ── Source term (GPU kernel — no CPU round-trip) ──────────────────
             if _use_gpu_source:
                 self._mgr.sequence().record(
-                    kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(dt)])
+                    kp.OpAlgoDispatch(self._require_algo_source(), _pc_source(N, dt))
                 ).eval()
             elif not _use_gpu_source:
                 if source_fn is not None:

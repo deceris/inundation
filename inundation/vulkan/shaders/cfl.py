@@ -30,7 +30,7 @@ layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 
 layout(push_constant) uniform PC {
-    float num_edges;
+    uint  num_edges;
     float dt;
     float g;
     float dry_tol;
@@ -42,7 +42,7 @@ layout(push_constant) uniform PC {
     + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
-    if (eid >= uint(pc.num_edges)) return;
+    if (eid >= pc.num_edges) return;
 
     int   cL  = ecL[eid];
     int   cR  = ecR[eid];
@@ -99,7 +99,7 @@ layout(set=0, binding=17) buffer DTBUF  { uint  dt_buf_u[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float dt;
     float g;
     float dry_tol;
@@ -108,7 +108,7 @@ layout(push_constant) uniform PC {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
 
     float lam = cfl_scratch[i];
     cfl_scratch[i] = 0.0;

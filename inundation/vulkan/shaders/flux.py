@@ -152,7 +152,7 @@ float wave_bound(float hL, float huL, float hvL, float dzL,
 _FLUX_MAIN = """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
-    if (eid >= uint(pc.num_edges)) return;
+    if (eid >= pc.num_edges) return;
 
     int  cL   = ecL[eid];
     int  cR   = ecR[eid];
@@ -245,7 +245,7 @@ def _flux(dt_field: str) -> str:
         + _BINDINGS
         + f"""
 layout(push_constant) uniform PC {{
-    float num_edges;
+    uint  num_edges;
     float {dt_field};
     float g;
     float dry_tol;

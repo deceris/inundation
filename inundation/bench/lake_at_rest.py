@@ -12,7 +12,6 @@ import numpy as np
 
 from inundation.mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
 from inundation.tuning import CFL_DEFAULT, DRY_TOL_DEFAULT, GRAVITY_G
-from inundation.vulkan.fixed_dt_batch import SWESolverFixedDtBatch
 from inundation.vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
 from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 from inundation.workflow import (
@@ -38,7 +37,6 @@ OUTPUT_INTERVAL_S = 60.0
 VARIANT_ETA: dict[str, float] = {"A": 1.0, "B": 0.5}
 FRICTION_N: dict[str, float] = {"minimal": 1e-4, "production": 0.035}
 BACKENDS: dict[str, type[SWESolver]] = {
-    "fixed_dt_batch": SWESolverFixedDtBatch,
     "fixed_dt_batch_barrier": SWESolverFixedDtBatchBarrier,
     "gpu_resident_batch": SWESolverGpuResidentBatch,
 }
@@ -324,8 +322,8 @@ def main() -> None:
         choices=[*list(BACKENDS), "all"],
         default="fixed_dt_batch_barrier",
         help=(
-            "solver backend (fixed_dt_batch_barrier is the production reference; "
-            "unbarriered fixed_dt_batch races, see LAKE_AT_REST_BASELINE_RESULTS.md §10)"
+            "solver backend (fixed_dt_batch_barrier is the barrier reference; the "
+            "unbarriered fixed_dt_batch raced and refuses to run)"
         ),
     )
     parser.add_argument(

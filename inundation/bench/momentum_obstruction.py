@@ -177,12 +177,10 @@ DEFAULT_BACKENDS = ("gpu_resident_batch",)
 BackendImpl = Literal[
     "fixed_dt_batch_barrier",
     "gpu_resident_batch",
-    "fixed_dt_batch",
 ]
 AVAILABLE_BACKENDS: tuple[BackendImpl, ...] = (
     "fixed_dt_batch_barrier",
     "gpu_resident_batch",
-    "fixed_dt_batch",
 )
 GIF_FRAMES_DEFAULT = 60
 GIF_VMAX_M = 0.8

@@ -7,6 +7,7 @@ drift between geometry, workflow, Vulkan solver, and benchmarks.
 from __future__ import annotations
 
 import math
+import struct
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -60,7 +61,27 @@ MIN_VOLUME_RATIO = 0.01
 MIN_REPEATS_FOR_DETERMINISM = 2
 
 
+# Cells below this area are rejected by build_geometry. The CFL kernels skip
+# cells at or below it (``area[i] > 1e-10`` in the GLSL) so a sliver cannot
+# pin dt to zero; a wet sliver that slipped through would instead divide by
+# its area and blow the state up.
+MIN_CELL_AREA = 1e-10
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def uint_as_float_bits(n: int) -> float:
+    """A 32-bit count as the float whose bit pattern it is.
+
+    Kompute takes push constants as a list of floats. Passing a count as a
+    float value is exact only up to 2^24 (16.7 M edges or cells); above that
+    it rounds and the kernels silently skip the tail. The shaders declare
+    counts as ``uint`` and read these bits directly.
+    """
+    if not 0 <= n < 2**32:
+        raise ValueError(f"count must fit in 32 bits, got {n}")
+    return float(struct.unpack("<f", struct.pack("<I", n))[0])
 
 
 def compute_workgroups(

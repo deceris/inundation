@@ -127,7 +127,7 @@ class WorkflowConfig:
         "fixed_dt_batch",
         "fixed_dt_batch_barrier",
         "gpu_resident_batch",
-    ] = "baseline"
+    ] = "gpu_resident_batch"
 
     def __post_init__(self) -> None:
         """Validate that required solver parameters are within sensible ranges."""

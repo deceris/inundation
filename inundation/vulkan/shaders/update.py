@@ -44,7 +44,7 @@ layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 layout(set=0, binding=19) buffer CLAMPM { float clamp_mass[]; };
 
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float dt;
     float g;
     float dry_tol;
@@ -55,7 +55,7 @@ layout(push_constant) uniform PC {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
 
     float A   = area[i];
     float dt  = pc.dt;
@@ -149,7 +149,7 @@ layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 layout(set=0, binding=19) buffer CLAMPM { float clamp_mass[]; };
 
 layout(push_constant) uniform PC {
-    float num_cells;
+    uint  num_cells;
     float dt_unused;
     float g;
     float dry_tol;
@@ -160,7 +160,7 @@ layout(push_constant) uniform PC {
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= uint(pc.num_cells)) return;
+    if (i >= pc.num_cells) return;
 
     float A   = area[i];
     float dt  = dt_buf[0];

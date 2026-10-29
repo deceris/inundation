@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_update
+from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_source, _pc_update
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,7 +38,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
             spv["flux_dtbuf"],
             workgroup=wg_e,
             spec_consts=[],
-            push_consts=[float(E), 0.0, g, dt, self._cfl, 0.0],
+            push_consts=_pc_flux(E, 0.0, g, dt, self._cfl, 0),
         )
         self._algo_update_dtbuf = self._mgr.algorithm(
             self._update_tensors,
@@ -170,7 +170,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
 
             step_seq = self._mgr.sequence()
             step_seq.record(
-                kp.OpAlgoDispatch(self._algo_flux_dtbuf, [float(E), 0.0, g, dry_tol, cfl, 0.0])
+                kp.OpAlgoDispatch(self._algo_flux_dtbuf, _pc_flux(E, 0.0, g, dry_tol, cfl, 0))
             )
             step_seq.record(
                 kp.OpAlgoDispatch(
@@ -179,7 +179,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 )
             )
             step_seq.record(
-                kp.OpAlgoDispatch(self._algo_flux_dtbuf, [float(E), 0.0, g, dry_tol, cfl, 1.0])
+                kp.OpAlgoDispatch(self._algo_flux_dtbuf, _pc_flux(E, 0.0, g, dry_tol, cfl, 1))
             )
             step_seq.record(
                 kp.OpAlgoDispatch(
@@ -188,7 +188,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 )
             )
             if use_gpu_source:
-                step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))
+                step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), _pc_source(N, 0.0)))
             step_seq.eval()
 
             t_sim += dt
