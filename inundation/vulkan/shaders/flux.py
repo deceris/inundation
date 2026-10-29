@@ -205,6 +205,10 @@ void main() {
 
     float Fh, Fhn, Fht, Smax;
     hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
+    // A wall passes no mass. The mirrored Riemann problem gives zero only up
+    // to float32 rounding, with a sign set by the flow direction, which over
+    // many steps is a systematic leak.
+    if (cR < 0) { Fh = 0.0; }
 
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;

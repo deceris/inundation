@@ -23,6 +23,8 @@ from .resident import (
     FLUX_RESIDENT_GLSL,
     SOURCE_RESIDENT_GLSL,
     STEP_CONTROL_GLSL,
+    UPDATE_RESIDENT_COMP_GLSL,
+    UPDATE_RESIDENT_GATHER_COMP_GLSL,
     UPDATE_RESIDENT_GATHER_GLSL,
     UPDATE_RESIDENT_GLSL,
 )
@@ -79,6 +81,12 @@ def compile_all() -> dict[str, bytes]:
         "update_resident_gather": compile_glsl(
             UPDATE_RESIDENT_GATHER_GLSL, "update_resident_gather_kernel"
         ),
+        "update_resident_comp": compile_glsl(
+            UPDATE_RESIDENT_COMP_GLSL, "update_resident_comp_kernel"
+        ),
+        "update_resident_gather_comp": compile_glsl(
+            UPDATE_RESIDENT_GATHER_COMP_GLSL, "update_resident_gather_comp_kernel"
+        ),
         "cfl_edge_gather": compile_glsl(CFL_EDGE_GATHER_GLSL, "cfl_edge_gather_kernel"),
         "cfl_gather": compile_glsl(CFL_GATHER_GLSL, "cfl_gather_kernel"),
     }
@@ -103,6 +111,8 @@ __all__ = [
     "STEP_CONTROL_GLSL",
     "UPDATE_DTBUF_GLSL",
     "UPDATE_GLSL",
+    "UPDATE_RESIDENT_COMP_GLSL",
+    "UPDATE_RESIDENT_GATHER_COMP_GLSL",
     "UPDATE_RESIDENT_GATHER_GLSL",
     "UPDATE_RESIDENT_GLSL",
     "compile_all",

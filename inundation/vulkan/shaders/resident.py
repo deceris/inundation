@@ -209,6 +209,8 @@ void main() {
 
     float Fh, Fhn, Fht, Smax;
     hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
+    // A wall passes no mass (see FLUX_GLSL).
+    if (cR < 0) { Fh = 0.0; }
 
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
@@ -290,12 +292,86 @@ _UPDATE_SUM_GATHER = """\
 """
 
 
-def _update_resident(gather: bool) -> str:
+# Compensated depth (``compensated`` on the solver): the depth of a cell is the
+# exact sum of two float32 words, h + h_lo with |h_lo| <= ulp(h)/2 (bindings
+# 28-29; the predictor keeps its own pair). Every update goes through an
+# error-free transform, so an increment smaller than half an ulp of h is kept
+# in h_lo instead of being rounded away. The flux kernels read h alone.
+_COMP_BINDINGS = """\
+layout(set=0, binding=28) buffer HLO    { float h_lo[];   };
+layout(set=0, binding=29) buffer H1LO   { float h1_lo[];  };
+"""
+
+# Knuth's two-sum: s + e == a + b exactly. `precise` keeps the compiler from
+# contracting or reassociating the error term away.
+_EFT_GLSL = """\
+void two_sum(float a, float b, out float s, out float e) {
+    precise float t  = a + b;
+    precise float bb = t - a;
+    precise float err = (a - (t - bb)) + (b - bb);
+    s = t;
+    e = err;
+}
+
+// (hi + loi) + inc as a renormalised pair, clamped at zero.
+void add_compensated(float hi, float loi, float inc, out float h_new, out float lo_new) {
+    float s, e;
+    two_sum(hi, inc, s, e);
+    e += loi;
+    two_sum(s, e, h_new, lo_new);
+    if (h_new < 0.0 || (h_new == 0.0 && lo_new < 0.0)) { h_new = 0.0; lo_new = 0.0; }
+}
+"""
+
+_UPDATE_DEPTH_PLAIN = """\
+    float h_raw  = hi  - dti * sdh;
+    float h_new = max(h_raw, 0.0);
+    float lo_new = 0.0;
+"""
+
+# h_raw is the unclamped high word; the clamp diagnostic ignores the low word.
+_UPDATE_DEPTH_COMP = """\
+    float loi = (pc.stage < 0.5) ? h_lo[i] : h1_lo[i];
+    float h_new, lo_new;
+    add_compensated(hi, loi, -dti * sdh, h_new, lo_new);
+    float s_raw, e_raw;
+    two_sum(hi, -dti * sdh, s_raw, e_raw);
+    float h_raw = s_raw + (e_raw + loi);
+"""
+
+_UPDATE_STORE_PLAIN = """\
+    if (pc.stage < 0.5) {
+        h1[i]  = h_new;
+    } else {
+        hf = 0.5 * (h[i] + h_new);
+        h[i] = hf;
+    }
+"""
+
+_UPDATE_STORE_COMP = """\
+    if (pc.stage < 0.5) {
+        h1[i]    = h_new;
+        h1_lo[i] = lo_new;
+    } else {
+        // Heun average of two compensated depths; halving is exact.
+        float s, e;
+        two_sum(h[i], h_new, s, e);
+        e += h_lo[i] + lo_new;
+        float lof;
+        two_sum(0.5 * s, 0.5 * e, hf, lof);
+        h[i]    = hf;
+        h_lo[i] = lof;
+    }
+"""
+
+
+def _update_resident(gather: bool, compensated: bool = False) -> str:
     return (
         "#version 450\n\nlayout(local_size_x = 256) in;\n\n"
         + _BINDINGS
         + _ACTIVE_BINDINGS
         + (_GATHER_BINDINGS if gather else "")
+        + (_COMP_BINDINGS if compensated else "")
         + """\
 layout(set=0, binding=19) buffer CLAMPM { float clamp_mass[]; };
 
@@ -309,6 +385,9 @@ layout(push_constant) uniform PC {
     float track_clamp;
 } pc;
 
+"""
+        + (_EFT_GLSL if compensated else "")
+        + """
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= uint(pc.num_cells)) return;
@@ -340,12 +419,12 @@ void main() {
 
 """
         + (_UPDATE_SUM_GATHER if gather else _UPDATE_SUM_ATOMIC)
-        + """
-    float h_raw  = hi  - dti * sdh;
+        + "\n"
+        + (_UPDATE_DEPTH_COMP if compensated else _UPDATE_DEPTH_PLAIN)
+        + """\
     float hu_new = hui - dti * sdhu;
     float hv_new = hvi - dti * sdhv;
 
-    float h_new = max(h_raw, 0.0);
     if (pc.track_clamp > 0.5) {
         clamp_mass[i] += 0.5 * A * (h_new - h_raw);
     }
@@ -363,19 +442,20 @@ void main() {
         hv_new = hv_new / den;
     }
 
+    float hf = 0.0;
+"""
+        + (_UPDATE_STORE_COMP if compensated else _UPDATE_STORE_PLAIN)
+        + """\
     if (pc.stage < 0.5) {
-        h1[i]  = h_new;
         hu1[i] = hu_new;
         hv1[i] = hv_new;
     } else {
-        float hf  = 0.5 * (h[i]  + h_new);
         float huf = 0.5 * (hu[i] + hu_new);
         float hvf = 0.5 * (hv[i] + hv_new);
         // A cell that ends the step dry carries no momentum. The stage results
         // zeroed theirs; averaging in the start-of-step value would leave half
         // of it behind, to re-enter the flow when the cell wets again.
         if (hf < pc.dry_tol) { huf = 0.0; hvf = 0.0; }
-        h[i]  = hf;
         hu[i] = huf;
         hv[i] = hvf;
 
@@ -398,6 +478,8 @@ void main() {
 
 UPDATE_RESIDENT_GLSL = _update_resident(gather=False)
 UPDATE_RESIDENT_GATHER_GLSL = _update_resident(gather=True)
+UPDATE_RESIDENT_COMP_GLSL = _update_resident(gather=False, compensated=True)
+UPDATE_RESIDENT_GATHER_COMP_GLSL = _update_resident(gather=True, compensated=True)
 
 # Prologue CFL bound for the gather path: each edge's wave-speed term (as in
 # CFL_ACCUM_GLSL) into binding 24, then each cell sums its edges in CSR order
@@ -486,7 +568,8 @@ void main() {
 
 # Sources as a compact list: binding 19 holds (cell index, dh/dt) word pairs,
 # the rate as float bits. A source can wet a cell in an inactive block, so it
-# marks that block for the next step.
+# marks that block for the next step. With ``compensate`` set the increment
+# goes into the (h, h_lo) pair (h_lo at binding 24 here).
 SOURCE_RESIDENT_GLSL = (
     """\
 #version 450
@@ -498,19 +581,32 @@ layout(local_size_x = 256) in;
     + _ACTIVE_BINDINGS
     + """\
 layout(set=0, binding=19) buffer SRC    { uint src_u[]; };
+layout(set=0, binding=24) buffer HLO    { float h_lo[]; };
 
 layout(push_constant) uniform PC {
     float num_sources;
     float dry_tol;
+    float compensate;
 } pc;
 
+"""
+    + _EFT_GLSL
+    + """
 void main() {
     uint k = gl_GlobalInvocationID.x;
     if (k >= uint(pc.num_sources)) return;
     if (dt_buf_u[0] == 0u) return;
     uint i = src_u[2u * k];
     float s = uintBitsToFloat(src_u[2u * k + 1u]);
-    float h_new = max(h[i] + uintBitsToFloat(dt_buf_u[0]) * s, 0.0);
+    float inc = uintBitsToFloat(dt_buf_u[0]) * s;
+    float h_new;
+    if (pc.compensate > 0.5) {
+        float lo_new;
+        add_compensated(h[i], h_lo[i], inc, h_new, lo_new);
+        h_lo[i] = lo_new;
+    } else {
+        h_new = max(h[i] + inc, 0.0);
+    }
     h[i] = h_new;
     if (h_new >= pc.dry_tol) {
         blk[BLK_WORDS * block_of(i) + BLK_WET] = 1u;
@@ -681,6 +777,8 @@ __all__ = [
     "FLUX_RESIDENT_GLSL",
     "SOURCE_RESIDENT_GLSL",
     "STEP_CONTROL_GLSL",
+    "UPDATE_RESIDENT_COMP_GLSL",
+    "UPDATE_RESIDENT_GATHER_COMP_GLSL",
     "UPDATE_RESIDENT_GATHER_GLSL",
     "UPDATE_RESIDENT_GLSL",
 ]

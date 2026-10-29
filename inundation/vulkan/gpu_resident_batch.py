@@ -90,8 +90,8 @@ def _pc_step_control(mode: StepControlMode) -> list[float]:
     return [float(mode.value)]
 
 
-def _pc_source_resident(num_sources: int, dry_tol: float) -> list[float]:
-    return [float(num_sources), dry_tol]
+def _pc_source_resident(num_sources: int, dry_tol: float, compensate: bool) -> list[float]:
+    return [float(num_sources), dry_tol, 1.0 if compensate else 0.0]
 
 
 def _pc_block_mark(nc: int, n_blocks: int, dry_tol: float, all_active: bool) -> list[float]:
@@ -130,6 +130,11 @@ class SWESolverGpuResidentBatch(SWESolver):
     active_set: bool = True
     # Fixed-order sums instead of float atomics: bit-identical repeat runs.
     deterministic: bool = True
+    # Depth as an exact float32 pair (h, h_lo), updated with error-free
+    # transforms: increments below half an ulp of h are kept, not rounded
+    # away. Read when a run is recorded; the low words persist across resumed
+    # runs and are cleared by reset().
+    compensated: bool = True
 
     def _build_tensors(
         self,
@@ -204,11 +209,27 @@ class SWESolverGpuResidentBatch(SWESolver):
             self.t_cell_edge_idx,
             self.t_touched,
         ]
-        # Bindings 0-18, clamp mass at 19, active set at 20-23, gather at 24-27.
-        self._active_tensors = [*self._update_tensors, *self._active_extra, *self._gather_extra]
+        # Compensated depth: low words of the committed and predictor depths.
+        self.t_h_lo = self._mgr.tensor(np.zeros(self.N, dtype=np.float32))
+        self.t_h1_lo = self._mgr.tensor(np.zeros(self.N, dtype=np.float32))
+        self._comp_extra = [self.t_h_lo, self.t_h1_lo]
+        # Bindings 0-18, clamp mass at 19, active set at 20-23, gather at
+        # 24-27, compensated depth at 28-29.
+        self._active_tensors = [
+            *self._update_tensors,
+            *self._active_extra,
+            *self._gather_extra,
+            *self._comp_extra,
+        ]
         self._mgr.sequence().record(
             kp.OpTensorSyncDevice(
-                [self.t_dtbuf, self.t_ctrl, *self._active_extra, *self._gather_extra]
+                [
+                    self.t_dtbuf,
+                    self.t_ctrl,
+                    *self._active_extra,
+                    *self._gather_extra,
+                    *self._comp_extra,
+                ]
             )
         ).eval()
 
@@ -231,9 +252,12 @@ class SWESolverGpuResidentBatch(SWESolver):
             ]
             for gather in (False, True)
         }
+        # Keyed by (deterministic, compensated).
         self._update_spv = {
-            False: spv["update_resident"],
-            True: spv["update_resident_gather"],
+            (False, False): spv["update_resident"],
+            (True, False): spv["update_resident_gather"],
+            (False, True): spv["update_resident_comp"],
+            (True, True): spv["update_resident_gather_comp"],
         }
         self._wg_c = wg_c
         self._build_update_algos()
@@ -318,6 +342,8 @@ class SWESolverGpuResidentBatch(SWESolver):
                 self.t_touched,
                 self.t_dtbuf,
                 self.t_blocks,
+                self.t_h_lo,
+                self.t_h1_lo,
             ]
         )
 
@@ -329,7 +355,7 @@ class SWESolverGpuResidentBatch(SWESolver):
         # Rebuilt when track_clamp changes: it is baked into the push constants.
         self._update_track_clamp = self.track_clamp
         self._algo_update_stage = {
-            gather: [
+            key: [
                 self._mgr.algorithm(
                     self._active_tensors,
                     spv,
@@ -341,8 +367,26 @@ class SWESolverGpuResidentBatch(SWESolver):
                 )
                 for stage in (0, 1)
             ]
-            for gather, spv in self._update_spv.items()
+            for key, spv in self._update_spv.items()
         }
+
+    def reset(
+        self, h0: NDArray[np.float32], hu0: NDArray[np.float32], hv0: NDArray[np.float32]
+    ) -> None:
+        """Re-upload initial conditions; the compensated low words start at zero."""
+        super().reset(h0, hu0, hv0)
+        zeros = np.zeros(self.N, dtype=np.float32)
+        for tensor in self._comp_extra:
+            self._set_tensor_host_data(tensor, zeros)
+        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._comp_extra)).eval()
+
+    def download_h_residual(self) -> NDArray[np.float32]:
+        """Low words of the compensated depth; zero unless ``compensated`` ran."""
+        return self._download(self.t_h_lo)
+
+    def download_h_precise(self) -> NDArray[np.float64]:
+        """Depth as float64: the committed float32 word plus its low word."""
+        return self.download_h().astype(np.float64) + self.download_h_residual().astype(np.float64)
 
     def download_block_flags(self) -> NDArray[np.uint32]:
         """``(n_blocks, 2)`` active-set flags: wet, active."""
@@ -358,7 +402,7 @@ class SWESolverGpuResidentBatch(SWESolver):
 
     def _record_step(self, seq: kp.Sequence, use_source: bool) -> None:  # pyright: ignore[reportAttributeAccessIssue]
         flux = self._algo_flux_stage[self.deterministic]
-        update = self._algo_update_stage[self.deterministic]
+        update = self._algo_update_stage[(self.deterministic, self.compensated)]
         for stage in (0, 1):
             seq.record(kp.OpAlgoDispatch(flux[stage]))
             seq.record(self._barrier_flux)
@@ -368,7 +412,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             seq.record(
                 kp.OpAlgoDispatch(
                     self._require_source_list(),
-                    _pc_source_resident(self._source_count, self._dry_tol),
+                    _pc_source_resident(self._source_count, self._dry_tol, self.compensated),
                 )
             )
             seq.record(self._barrier_state)
@@ -400,13 +444,15 @@ class SWESolverGpuResidentBatch(SWESolver):
         packed[1 : 2 * cells.size : 2] = src_dh_per_sec[cells].astype(np.float32).view(np.uint32)
         if self._algo_source_list is None or cells.size != self._source_count:
             self.t_source_list = self._mgr.tensor(_f32_bits(packed))
-            tensors = [*self._all_tensors, self.t_source_list, *self._active_extra]
+            # Bindings 0-18, the source list at 19, active set at 20-23, the
+            # compensated low word at 24.
+            tensors = [*self._all_tensors, self.t_source_list, *self._active_extra, self.t_h_lo]
             self._algo_source_list = self._mgr.algorithm(
                 tensors,
                 self._source_list_spv,
                 workgroup=(max(1, math.ceil(cells.size / self._work_group_size)), 1, 1),
                 spec_consts=[],
-                push_consts=_pc_source_resident(cells.size, self._dry_tol),
+                push_consts=_pc_source_resident(cells.size, self._dry_tol, self.compensated),
             )
         else:
             np.copyto(np.asarray(self.t_source_list.data()), _f32_bits(packed))

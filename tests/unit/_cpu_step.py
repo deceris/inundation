@@ -171,6 +171,7 @@ def flux_divergence(
     length = geom.edge_len.astype(F64)
     hLs, hqnL, hqtL, hRs, hqnR, hqtR, hL, hR, live = _edge_states(geom, s, dry_tol=dry_tol)
     Fh, Fhn, Fht, _ = hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, g=g, dry_tol=dry_tol)
+    Fh = np.where(geom.edge_cellR < 0, 0.0, Fh)  # a wall passes no mass
     Fhu = Fhn * nx - Fht * ny
     Fhv = Fhn * ny + Fht * nx
     SL_g = 0.5 * g * (hL * hL - hLs * hLs)

@@ -115,6 +115,9 @@ class WorkflowConfig:
     # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
     # instead of float atomics. None keeps the backend default (on).
     deterministic: bool | None = None
+    # GPU-resident only: depth as an exact float32 pair so sub-ulp increments
+    # are not rounded away. None keeps the backend default (on).
+    compensated: bool | None = None
     output_every_steps: int | None = None
     solver_impl: Literal[
         "baseline",
@@ -636,6 +639,8 @@ class SWEWorkflow:
             solver.steps_per_graph = self.config.steps_per_graph
         if self.config.deterministic is not None and isinstance(solver, SWESolverGpuResidentBatch):
             solver.deterministic = self.config.deterministic
+        if self.config.compensated is not None and isinstance(solver, SWESolverGpuResidentBatch):
+            solver.compensated = self.config.compensated
 
     def run(self, phases: Sequence[SimulationPhase]) -> WorkflowResult:
         """Execute one or more discharge phases and return simulation outputs."""
@@ -713,7 +718,14 @@ class SWEWorkflow:
 
         wall_seconds = time.perf_counter() - t_wall_start
         h_final = self.solver.download_h()
-        volume_final_m3 = float((h_final * area).sum())
+        # Volume in float64, from the compensated depth where the backend keeps one.
+        download_precise = getattr(self.solver, "download_h_precise", None)
+        h_precise = (
+            cast("NDArray[np.float64]", download_precise())
+            if callable(download_precise)
+            else h_final.astype(np.float64)
+        )
+        volume_final_m3 = float((h_precise * area.astype(np.float64)).sum())
         volume_injected_m3 = float(
             sum(
                 phase.duration_s * sum(source.discharge_m3s for source in phase.sources)

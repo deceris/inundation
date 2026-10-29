@@ -50,6 +50,8 @@ from inundation.vulkan.shaders import (
     STEP_CONTROL_GLSL,
     UPDATE_DTBUF_GLSL,
     UPDATE_GLSL,
+    UPDATE_RESIDENT_COMP_GLSL,
+    UPDATE_RESIDENT_GATHER_COMP_GLSL,
     UPDATE_RESIDENT_GATHER_GLSL,
     UPDATE_RESIDENT_GLSL,
 )
@@ -118,7 +120,15 @@ class TestUpdatePushConstants:
     """The helper whose ordering bug froze four backends."""
 
     @pytest.mark.parametrize(
-        "glsl", [UPDATE_GLSL, UPDATE_DTBUF_GLSL, UPDATE_RESIDENT_GLSL, UPDATE_RESIDENT_GATHER_GLSL]
+        "glsl",
+        [
+            UPDATE_GLSL,
+            UPDATE_DTBUF_GLSL,
+            UPDATE_RESIDENT_GLSL,
+            UPDATE_RESIDENT_GATHER_GLSL,
+            UPDATE_RESIDENT_COMP_GLSL,
+            UPDATE_RESIDENT_GATHER_COMP_GLSL,
+        ],
     )
     def test_matches_the_shader_struct(self, glsl: str) -> None:
         emitted = _pc_update(int(NUM_ELEMENTS), DT, int(STAGE), G, DRY_TOL, CFL, track_clamp=True)
@@ -190,9 +200,18 @@ class TestResidentPushConstants:
         assert 0.5 < StepControlMode.STEP.value < 1.5
         assert StepControlMode.RETARGET.value > 1.5
 
-    def test_source_matches_the_shader_struct(self) -> None:
-        assert push_constant_fields(SOURCE_RESIDENT_GLSL) == ["num_sources", "dry_tol"]
-        assert _pc_source_resident(int(NUM_ELEMENTS), DRY_TOL) == [NUM_ELEMENTS, DRY_TOL]
+    @pytest.mark.parametrize("compensate", [False, True])
+    def test_source_matches_the_shader_struct(self, compensate: bool) -> None:
+        assert push_constant_fields(SOURCE_RESIDENT_GLSL) == [
+            "num_sources",
+            "dry_tol",
+            "compensate",
+        ]
+        assert _pc_source_resident(int(NUM_ELEMENTS), DRY_TOL, compensate) == [
+            NUM_ELEMENTS,
+            DRY_TOL,
+            1.0 if compensate else 0.0,
+        ]
 
     @pytest.mark.parametrize("all_active", [False, True])
     def test_block_mark_matches_the_shader_struct(self, all_active: bool) -> None:
