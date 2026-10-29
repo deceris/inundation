@@ -71,6 +71,7 @@ from inundation.bench.common import (
     water_surface_elevation,
     write_mesh_parquet,
 )
+from inundation.tuning import CFL_DEFAULT
 from inundation.workflow import (
     PointSource,
     SimulationPhase,
@@ -187,6 +188,7 @@ class DepressionSpec:
     dt_max: float
     cfl_interval: int
     dataset_dir: Path
+    cfl: float = CFL_DEFAULT
 
     @property
     def dx_m(self) -> float:
@@ -271,6 +273,7 @@ def _build_spec(args: argparse.Namespace) -> DepressionSpec:
         t_end_s=args.t_end,
         dt_max=args.dt_max,
         cfl_interval=args.cfl_interval,
+        cfl=args.cfl,
         dataset_dir=Path(args.dataset_dir),
     )
 
@@ -398,6 +401,7 @@ def _make_workflow(
         dt_max=spec.dt_max,
         dt_init=DT_INIT_DEFAULT,
         cfl_interval=spec.cfl_interval,
+        cfl=spec.cfl,
         progress=progress,
         capture_momentum_snapshots=capture_momentum_snapshots,
         initial_state_source=_initial_state(spec),
@@ -725,6 +729,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--t-end", type=float, default=T_END_S)
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
+    parser.add_argument("--cfl", type=float, default=CFL_DEFAULT, help="CFL number")
     parser.add_argument(
         "--output-interval-s",
         type=float,

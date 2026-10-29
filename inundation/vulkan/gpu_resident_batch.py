@@ -73,8 +73,6 @@ RESIDENT_CTRL_DTYPE = np.dtype(
     ]
 )
 
-# Applied to every CFL bound, as the per-batch resolve did before.
-CFL_SAFETY = 0.8
 STEPS_PER_GRAPH_DEFAULT = 200
 _DT_BINDING = 17
 
@@ -144,6 +142,11 @@ class SWESolverGpuResidentBatch(SWESolver):
     # away. Read when a run is recorded; the low words persist across resumed
     # runs and are cleared by reset().
     compensated: bool = True
+    # Factor on every CFL bound. The host-driven backends reuse one dt for
+    # cfl_interval steps and keep 0.8 for that; this backend recomputes the
+    # bound every step from the wave speeds the flux assumed, so the CFL
+    # number is the only knob.
+    cfl_safety: float = 1.0
 
     def _build_tensors(
         self,
@@ -580,7 +583,7 @@ class SWESolverGpuResidentBatch(SWESolver):
         ctrl["dt_ticks"] = 0
         ctrl["dt_max_ticks"] = dt_max_ticks
         ctrl["dry_dt_ticks"] = dry_dt_ticks
-        ctrl["cfl_safety"] = CFL_SAFETY
+        ctrl["cfl_safety"] = self.cfl_safety
 
         steps_seq = self._record_steps(self.steps_per_graph, use_source)
         retarget_seq = self._record_retarget()

@@ -68,7 +68,7 @@ from inundation.bench.common import (
     water_surface_elevation,
     write_mesh_parquet,
 )
-from inundation.tuning import GRAVITY_G
+from inundation.tuning import CFL_DEFAULT, GRAVITY_G
 from inundation.workflow import (
     PointSource,
     SimulationPhase,
@@ -196,6 +196,7 @@ class PropagationSpec:
     dt_max: float
     cfl_interval: int
     dataset_dir: Path
+    cfl: float = CFL_DEFAULT
 
     @property
     def dx_m(self) -> float:
@@ -277,6 +278,7 @@ def _build_spec(args: argparse.Namespace) -> PropagationSpec:
         probe_time_s=args.probe_time,
         dt_max=args.dt_max,
         cfl_interval=args.cfl_interval,
+        cfl=args.cfl,
         dataset_dir=Path(args.dataset_dir),
     )
 
@@ -404,6 +406,7 @@ def _run_once(
         dt_max=spec.dt_max,
         dt_init=DT_INIT_DEFAULT,
         cfl_interval=spec.cfl_interval,
+        cfl=spec.cfl,
         progress=progress,
         capture_momentum_snapshots=capture_momentum_snapshots,
         initial_state_order="original",
@@ -428,6 +431,7 @@ def _with_t_end(spec: PropagationSpec, t_end_s: float) -> PropagationSpec:
         probe_time_s=spec.probe_time_s,
         dt_max=spec.dt_max,
         cfl_interval=spec.cfl_interval,
+        cfl=spec.cfl,
         dataset_dir=spec.dataset_dir,
     )
 
@@ -806,6 +810,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
+    parser.add_argument("--cfl", type=float, default=CFL_DEFAULT, help="CFL number")
     parser.add_argument("--repeats", type=int, default=2, help=">=2 enables determinism check")
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--solver-progress", action="store_true")

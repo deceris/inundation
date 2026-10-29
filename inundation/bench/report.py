@@ -507,6 +507,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-unit-tests", action="store_true", help="skip the pytest run, benchmarks only"
     )
+    parser.add_argument(
+        "--cfl",
+        type=float,
+        default=None,
+        help="CFL number passed to every suite (default: each suite's)",
+    )
     return parser
 
 
@@ -526,6 +532,8 @@ def main() -> int:
     pytest_result = None if args.skip_unit_tests else _run_pytest(repo_root)
 
     extra_args = ["--repeats", str(args.repeats), "--warmup", str(args.warmup)]
+    if args.cfl is not None:
+        extra_args += ["--cfl", str(args.cfl)]
     results = [_run_suite(by_name[name], output_root, extra_args) for name in wanted]
 
     report_path = output_root / "report.html"

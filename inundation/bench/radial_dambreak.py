@@ -43,7 +43,7 @@ from inundation.bench.common import (
     volume_drift_rel,
     write_mesh_parquet,
 )
-from inundation.tuning import GRAVITY_G
+from inundation.tuning import CFL_DEFAULT, GRAVITY_G
 from inundation.workflow import (
     SimulationPhase,
     SWEWorkflow,
@@ -242,6 +242,7 @@ def _make_workflow(
     output_interval_s: float,
     dt_max: float,
     cfl_interval: int,
+    cfl: float,
     progress: bool,
 ) -> SWEWorkflow:
     config = WorkflowConfig(
@@ -251,6 +252,7 @@ def _make_workflow(
         dt_max=dt_max,
         dt_init=DT_INIT_DEFAULT,
         cfl_interval=cfl_interval,
+        cfl=cfl,
         progress=progress,
         initial_state_source=_initial_state(spec),
         initial_state_order="original",
@@ -269,6 +271,7 @@ def _run_once(
     output_interval_s: float,
     dt_max: float,
     cfl_interval: int,
+    cfl: float,
     progress: bool,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     workflow = _make_workflow(
@@ -278,6 +281,7 @@ def _run_once(
         output_interval_s=output_interval_s,
         dt_max=dt_max,
         cfl_interval=cfl_interval,
+        cfl=cfl,
         progress=progress,
     )
     result = workflow.run([SimulationPhase(duration_s=spec.t_end_s, sources=[])])
@@ -527,6 +531,7 @@ def _run_group(
             output_interval_s=output_interval_s,
             dt_max=args.dt_max,
             cfl_interval=args.cfl_interval,
+            cfl=args.cfl,
             progress=args.solver_progress,
         )
 
@@ -543,6 +548,7 @@ def _run_group(
             output_interval_s=output_interval_s,
             dt_max=args.dt_max,
             cfl_interval=args.cfl_interval,
+            cfl=args.cfl,
             progress=args.solver_progress,
         )
         walls.append(time.perf_counter() - t0)
@@ -598,6 +604,7 @@ def _run_group(
             output_interval_s=spec.t_end_s / safe_frames,
             dt_max=args.dt_max,
             cfl_interval=args.cfl_interval,
+            cfl=args.cfl,
             progress=args.solver_progress,
         )
         if args.gif:
@@ -670,6 +677,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--t-end", type=float, default=T_END_S)
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
+    parser.add_argument("--cfl", type=float, default=CFL_DEFAULT, help="CFL number")
     parser.add_argument(
         "--output-interval-s",
         type=float,
