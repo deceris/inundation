@@ -12,7 +12,7 @@ layout(local_size_x = 256) in;
 layout(set=0, binding=0)  buffer H      { float h[];      };
 layout(set=0, binding=1)  buffer HU     { float hu[];     };
 layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer ZB     { float zb[];     };
+layout(set=0, binding=3)  buffer EDZ    { float edz[];    };
 layout(set=0, binding=4)  buffer AREA   { float area[];   };
 layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
 layout(set=0, binding=6)  buffer ENX    { float enx[];    };
@@ -50,21 +50,22 @@ void main() {
     float ny_ = eny[eid];
     float len = elen[eid];
 
-    float hL = h[cL], huL = hu[cL], hvL = hv[cL], zbL = zb[cL];
-    float hR, huR, hvR, zbR;
+    float hL = h[cL], huL = hu[cL], hvL = hv[cL];
+    float hR, huR, hvR;
     if (cR < 0) {
         hR  = hL;
         huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
         hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
-        zbR = zbL;
     } else {
-        hR = h[cR]; huR = hu[cR]; hvR = hv[cR]; zbR = zb[cR];
+        hR = h[cR]; huR = hu[cR]; hvR = hv[cR];
     }
     // A fully dry edge carries no flux and no CFL constraint, as in the flux
     // kernels: a cell whose edges are all dry gets no dt estimate at all.
     if (hL < pc.dry_tol && hR < pc.dry_tol) return;
 
-    float contrib = wave_bound(hL, huL, hvL, zbL, hR, huR, hvR, zbR, nx_, ny_) * len;
+    float dzL = edz[2u * eid];
+    float dzR = edz[2u * eid + 1u];
+    float contrib = wave_bound(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_) * len;
     atomicAdd(cfl_scratch[cL], contrib);
     if (cR >= 0) { atomicAdd(cfl_scratch[cR], contrib); }
 }
@@ -80,7 +81,7 @@ layout(local_size_x = 256) in;
 layout(set=0, binding=0)  buffer H      { float h[];      };
 layout(set=0, binding=1)  buffer HU     { float hu[];     };
 layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer ZB     { float zb[];     };
+layout(set=0, binding=3)  buffer EDZ    { float edz[];    };
 layout(set=0, binding=4)  buffer AREA   { float area[];   };
 layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
 layout(set=0, binding=6)  buffer ENX    { float enx[];    };
@@ -129,7 +130,7 @@ layout(local_size_x = 1) in;
 layout(set=0, binding=0)  buffer H      { float h[];      };
 layout(set=0, binding=1)  buffer HU     { float hu[];     };
 layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer ZB     { float zb[];     };
+layout(set=0, binding=3)  buffer EDZ    { float edz[];    };
 layout(set=0, binding=4)  buffer AREA   { float area[];   };
 layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
 layout(set=0, binding=6)  buffer ENX    { float enx[];    };
@@ -177,7 +178,7 @@ layout(local_size_x = 1) in;
 layout(set=0, binding=0)  buffer H      { float h[];      };
 layout(set=0, binding=1)  buffer HU     { float hu[];     };
 layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer ZB     { float zb[];     };
+layout(set=0, binding=3)  buffer EDZ    { float edz[];    };
 layout(set=0, binding=4)  buffer AREA   { float area[];   };
 layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
 layout(set=0, binding=6)  buffer ENX    { float enx[];    };

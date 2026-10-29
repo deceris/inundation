@@ -56,6 +56,12 @@ class MeshGeometry:
     edge_len   : (E,)   float32  - edge length
     edge_nx   : (E,)   float32  - outward normal x (from left cell)
     edge_ny   : (E,)   float32  - outward normal y
+    edge_dzL  : (E,)   float32  - face elevation minus the left cell's bed (>= 0)
+    edge_dzR  : (E,)   float32  - face elevation minus the right cell's bed
+        (>= 0; both are zero on a boundary edge). The kernels reconstruct the
+        face depth as ``h - dz``: computed in float64 from the float32 bed, the
+        small step is exact where ``h + zb - z_face`` would lose the low bits
+        of a surface elevation hundreds of metres above the datum.
     edge_cellL : (E,)   int32    - left cell index
     edge_cellR : (E,)   int32    - right cell index (-1 = boundary)
 
@@ -92,6 +98,8 @@ class MeshGeometry:
     edge_len: NDArray[np.float32]
     edge_nx: NDArray[np.float32]
     edge_ny: NDArray[np.float32]
+    edge_dzL: NDArray[np.float32]
+    edge_dzR: NDArray[np.float32]
     edge_cellL: NDArray[np.int32]
     edge_cellR: NDArray[np.int32]
     edge_sideL: NDArray[np.int32]
@@ -135,6 +143,22 @@ def _polygon_centroid(poly_verts: NDArray[np.float32], signed_area: float) -> ND
     cx = float(np.sum((x + x1) * cross)) / (6.0 * signed_area)
     cy = float(np.sum((y + y1) * cross)) / (6.0 * signed_area)
     return np.array([cx, cy], dtype=np.float32)
+
+
+def edge_bed_steps(
+    zb: NDArray[np.float32], edge_cellL: NDArray[np.int32], edge_cellR: NDArray[np.int32]
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Face elevation minus each side's bed, ``(dzL, dzR)``, both ``>= 0``.
+
+    Computed in float64 from the float32 bed, so the result carries the exact
+    bed step even when the bed itself sits far above the datum. A boundary
+    edge mirrors its left cell: both steps are zero.
+    """
+    zb64 = zb.astype(np.float64)
+    zbL = zb64[edge_cellL]
+    zbR = np.where(edge_cellR >= 0, zb64[np.maximum(edge_cellR, 0)], zbL)
+    z_face = np.maximum(zbL, zbR)
+    return (z_face - zbL).astype(np.float32), (z_face - zbR).astype(np.float32)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +392,7 @@ def build_geometry(
     dots = dL[:, 0] * edge_nx[imask] + dL[:, 1] * edge_ny[imask]
     if not (dots >= 0).all():
         raise ValueError("Some interior edge normals point the wrong way!")
+    edge_dzL, edge_dzR = edge_bed_steps(zb, edge_cellL, edge_cellR)
 
     # ── CSR adjacency (primary representation) ────────────────────────────────
     _t_stage = time.perf_counter()
@@ -436,6 +461,8 @@ def build_geometry(
         edge_len=edge_len,
         edge_nx=edge_nx,
         edge_ny=edge_ny,
+        edge_dzL=edge_dzL,
+        edge_dzR=edge_dzR,
         edge_cellL=edge_cellL,
         edge_cellR=edge_cellR,
         edge_sideL=edge_sideL,
@@ -599,6 +626,8 @@ def hilbert_reorder(
     edge_len_sorted = geom.edge_len[edge_perm]
     edge_nx_sorted = geom.edge_nx[edge_perm]
     edge_ny_sorted = geom.edge_ny[edge_perm]
+    edge_dzL_sorted = geom.edge_dzL[edge_perm]
+    edge_dzR_sorted = geom.edge_dzR[edge_perm]
     edge_cellL_sorted = edge_cellL_new[edge_perm]
     edge_cellR_sorted = edge_cellR_new[edge_perm]
     edge_sideL_sorted = geom.edge_sideL[edge_perm]
@@ -635,6 +664,8 @@ def hilbert_reorder(
         edge_len=edge_len_sorted,
         edge_nx=edge_nx_sorted,
         edge_ny=edge_ny_sorted,
+        edge_dzL=edge_dzL_sorted,
+        edge_dzR=edge_dzR_sorted,
         edge_cellL=edge_cellL_sorted,
         edge_cellR=edge_cellR_sorted,
         edge_sideL=edge_sideL_sorted,

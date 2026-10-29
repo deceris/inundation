@@ -184,7 +184,9 @@ class SWESolver:
         self.t_h = g(h0)
         self.t_hu = g(hu0)
         self.t_hv = g(hv0)
-        self.t_zb = g(geom.zb)
+        # Binding 3: per-edge (dzL, dzR) pairs. The kernels never read the bed
+        # itself; they reconstruct face depths from these exact small steps.
+        self.t_edz = g(np.column_stack([geom.edge_dzL, geom.edge_dzR]).ravel())
         self.t_area = g(geom.area)
         self.t_elen = g(geom.edge_len)
         self.t_enx = g(geom.edge_nx)
@@ -210,7 +212,7 @@ class SWESolver:
             self.t_h,
             self.t_hu,
             self.t_hv,
-            self.t_zb,
+            self.t_edz,
             self.t_area,
             self.t_elen,
             self.t_enx,

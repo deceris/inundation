@@ -11,7 +11,7 @@ _BINDINGS = """\
 layout(set=0, binding=0)  buffer H      { float h[];      };
 layout(set=0, binding=1)  buffer HU     { float hu[];     };
 layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer ZB     { float zb[];     };
+layout(set=0, binding=3)  buffer EDZ    { float edz[];    };
 layout(set=0, binding=4)  buffer AREA   { float area[];   };
 layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
 layout(set=0, binding=6)  buffer ENX    { float enx[];    };
@@ -105,17 +105,17 @@ void hllc(float hL, float hqnL, float hqtL,
 }
 
 // Face states of one edge: depths reconstructed to the face elevation
-// (Audusse 2004 hydrostatic reconstruction), momenta rebuilt from the cells'
+// (Audusse 2004 hydrostatic reconstruction; dzL/dzR are the precomputed
+// face-minus-bed steps of the two sides), momenta rebuilt from the cells'
 // velocities and rotated into the face frame.
-void face_states(float hL, float huL, float hvL, float zbL,
-                 float hR, float huR, float hvR, float zbR,
+void face_states(float hL, float huL, float hvL, float dzL,
+                 float hR, float huR, float hvR, float dzR,
                  float nx_, float ny_,
                  out float hLs, out float hqnL, out float hqtL,
                  out float hRs, out float hqnR, out float hqtR)
 {
-    float z_face = max(zbL, zbR);
-    hLs = max(0.0, hL + zbL - z_face);
-    hRs = max(0.0, hR + zbR - z_face);
+    hLs = max(0.0, hL - dzL);
+    hRs = max(0.0, hR - dzR);
 
     float uL = safe_vel(hL, huL);
     float vL = safe_vel(hL, hvL);
@@ -134,12 +134,12 @@ void face_states(float hL, float huL, float hvL, float zbL,
 }
 
 // Largest wave speed the flux would assume on this edge: the CFL term.
-float wave_bound(float hL, float huL, float hvL, float zbL,
-                 float hR, float huR, float hvR, float zbR,
+float wave_bound(float hL, float huL, float hvL, float dzL,
+                 float hR, float huR, float hvR, float dzR,
                  float nx_, float ny_)
 {
     float hLs, hqnL, hqtL, hRs, hqnR, hqtR;
-    face_states(hL, huL, hvL, zbL, hR, huR, hvR, zbR, nx_, ny_,
+    face_states(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_,
                 hLs, hqnL, hqtL, hRs, hqnR, hqtR);
     float SL, SR;
     hllc_speeds(hLs, safe_vel(hLs, hqnL), hRs, safe_vel(hRs, hqnR), SL, SR);
@@ -159,6 +159,8 @@ void main() {
     float nx_ = enx[eid];
     float ny_ = eny[eid];
     float len = elen[eid];
+    float dzL = edz[2u * eid];
+    float dzR = edz[2u * eid + 1u];
 
     // Early exit: skip fully-dry edges (both sides below dry tolerance)
     float hL_check = (pc.stage < 0.5) ? h[cL] : h1[cL];
@@ -176,9 +178,8 @@ void main() {
         huL = hu1[cL];
         hvL = hv1[cL];
     }
-    float zbL = zb[cL];
 
-    float hR, huR, hvR, zbR;
+    float hR, huR, hvR;
     if (cR < 0) {
         // Wall (reflective) BC: mirror the left state with negated normal velocity.
         // The HLLC solver sees identical depths on both sides and zero net normal
@@ -186,7 +187,6 @@ void main() {
         hR  = hL;
         huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
         hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
-        zbR = zbL;
     } else {
         if (pc.stage < 0.5) {
             hR  = h[cR];
@@ -197,11 +197,10 @@ void main() {
             huR = hu1[cR];
             hvR = hv1[cR];
         }
-        zbR = zb[cR];
     }
 
     float hLs, hqnL, hqtL, hRs, hqnR, hqtR;
-    face_states(hL, huL, hvL, zbL, hR, huR, hvR, zbR, nx_, ny_,
+    face_states(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_,
                 hLs, hqnL, hqtL, hRs, hqnR, hqtR);
 
     float Fh, Fhn, Fht, Smax;

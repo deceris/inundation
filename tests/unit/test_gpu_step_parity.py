@@ -81,7 +81,7 @@ def step_gpu(solver: Any, steps: int) -> State:
 def wet_lake(grid: MeshGeometry) -> State:
     """Every cell wet, a gentle current: no front and no drying anywhere."""
     x = grid.centroid[:, 0].astype(np.float64)
-    h = np.maximum(0.5 - grid.zb.astype(np.float64), 0.0)
+    h = float(grid.zb.max()) + 0.5 - grid.zb.astype(np.float64)
     assert (h > 10 * DRY_TOL).all()
     hu = 0.1 * np.sin(2 * np.pi * x / (NX * DX)) * h
     return State(h, hu, np.zeros_like(h))
@@ -115,11 +115,13 @@ CASES: dict[str, Callable[[MeshGeometry], State]] = {
 }
 
 
-def assert_matches(got: State, want: State) -> None:
+def assert_matches(
+    got: State, want: State, *, atol_h: float = ATOL_H, atol_q: float = ATOL_Q
+) -> None:
     for name, a, b, atol in (
-        ("h", got.h, want.h, ATOL_H),
-        ("hu", got.hu, want.hu, ATOL_Q),
-        ("hv", got.hv, want.hv, ATOL_Q),
+        ("h", got.h, want.h, atol_h),
+        ("hu", got.hu, want.hu, atol_q),
+        ("hv", got.hv, want.hv, atol_q),
     ):
         worst = float(np.abs(a - b).max())
         assert worst <= atol, f"{name}: max |gpu - reference| = {worst:.3e} > {atol:.1e}"
@@ -144,6 +146,42 @@ def test_steps_match_the_reference(
     )
     got = step_gpu(make_solver(backend, grid, spv, s0), STEPS)
     assert_matches(got, want)
+
+
+@pytest.fixture(scope="module")
+def high_grid() -> MeshGeometry:
+    # Real terrain sits hundreds of metres above the datum, where float32 bed
+    # elevations are spaced ~3e-5 m: a sizeable fraction of a thin film.
+    return valley_grid(datum=300.0)
+
+
+# Over 64 steps the datum-0 cases stay within these of the reference; the
+# high-terrain cases must do no worse, so the bed datum cannot leak into the
+# reconstructed depths.
+LONG_STEPS = 64
+LONG_ATOL_H = 5e-6
+LONG_ATOL_Q = 6e-7
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("case", ["dam_break", "draining"])
+def test_steps_on_high_terrain_match_the_reference(
+    case: str, backend: str, high_grid: MeshGeometry, spv: dict[str, bytes]
+) -> None:
+    s0 = CASES[case](high_grid)
+    want = run_steps(
+        high_grid,
+        s0.h.astype(np.float32),
+        s0.hu.astype(np.float32),
+        s0.hv.astype(np.float32),
+        np.full(high_grid.N, MANNING, np.float32),
+        DT,
+        LONG_STEPS,
+        g=GRAVITY_G,
+        dry_tol=DRY_TOL,
+    )
+    got = step_gpu(make_solver(backend, high_grid, spv, s0), LONG_STEPS)
+    assert_matches(got, want, atol_h=LONG_ATOL_H, atol_q=LONG_ATOL_Q)
 
 
 @pytest.mark.parametrize("case", list(CASES))

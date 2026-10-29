@@ -152,6 +152,8 @@ class SWESolverGpuResidentBatch(SWESolver):
             edge_len=geom.edge_len[order],
             edge_nx=geom.edge_nx[order],
             edge_ny=geom.edge_ny[order],
+            edge_dzL=geom.edge_dzL[order],
+            edge_dzR=geom.edge_dzR[order],
             edge_cellL=geom.edge_cellL[order],
             edge_cellR=geom.edge_cellR[order],
         )
