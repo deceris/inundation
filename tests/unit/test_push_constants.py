@@ -227,11 +227,15 @@ class TestResidentPushConstants:
             "num_sources",
             "dry_tol",
             "compensate",
+            "g",
+            "cfl_number",
         ]
-        assert _pc_source_resident(int(NUM_ELEMENTS), DRY_TOL, compensate) == [
+        assert _pc_source_resident(int(NUM_ELEMENTS), DRY_TOL, compensate, G, CFL) == [
             COUNT_BITS,
             DRY_TOL,
             1.0 if compensate else 0.0,
+            G,
+            CFL,
         ]
 
     @pytest.mark.parametrize("all_active", [False, True])
@@ -305,7 +309,7 @@ class TestCounts:
         assert self._decode(_pc_cfl_accum(self.BIG, G, DRY_TOL, CFL)[0]) == self.BIG
         assert self._decode(_pc_cfl_reduce(self.BIG, G, DRY_TOL, CFL)[0]) == self.BIG
         assert self._decode(_pc_source(self.BIG, DT)[0]) == self.BIG
-        assert self._decode(_pc_source_resident(self.BIG, DRY_TOL, True)[0]) == self.BIG
+        assert self._decode(_pc_source_resident(self.BIG, DRY_TOL, True, G, CFL)[0]) == self.BIG
         assert self._decode(_pc_cfl_edge_gather(self.BIG, G, DRY_TOL)[0]) == self.BIG
         assert self._decode(_pc_cfl_gather(self.BIG, CFL)[0]) == self.BIG
         marks = _pc_block_mark(self.BIG, self.BIG - 1, DRY_TOL, True)

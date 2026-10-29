@@ -92,8 +92,10 @@ def _pc_step_control(mode: StepControlMode) -> list[float]:
 # Counts travel as the float whose bits they are (uint in the shaders).
 
 
-def _pc_source_resident(num_sources: int, dry_tol: float, compensate: bool) -> list[float]:
-    return [uint_as_float_bits(num_sources), dry_tol, 1.0 if compensate else 0.0]
+def _pc_source_resident(
+    num_sources: int, dry_tol: float, compensate: bool, g: float, cfl: float
+) -> list[float]:
+    return [uint_as_float_bits(num_sources), dry_tol, 1.0 if compensate else 0.0, g, cfl]
 
 
 def _pc_block_mark(nc: int, n_blocks: int, dry_tol: float, all_active: bool) -> list[float]:
@@ -424,7 +426,9 @@ class SWESolverGpuResidentBatch(SWESolver):
             seq.record(
                 kp.OpAlgoDispatch(
                     self._require_source_list(),
-                    _pc_source_resident(self._source_count, self._dry_tol, self.compensated),
+                    _pc_source_resident(
+                        self._source_count, self._dry_tol, self.compensated, self._g, self._cfl
+                    ),
                 )
             )
             seq.record(self._barrier_state)
@@ -457,14 +461,23 @@ class SWESolverGpuResidentBatch(SWESolver):
         if self._algo_source_list is None or cells.size != self._source_count:
             self.t_source_list = self._mgr.tensor(_f32_bits(packed))
             # Bindings 0-18, the source list at 19, active set at 20-23, the
-            # compensated low word at 24.
-            tensors = [*self._all_tensors, self.t_source_list, *self._active_extra, self.t_h_lo]
+            # compensated low word at 24, the per-cell edge CSR at 25-26.
+            tensors = [
+                *self._all_tensors,
+                self.t_source_list,
+                *self._active_extra,
+                self.t_h_lo,
+                self.t_cell_edge_ptr,
+                self.t_cell_edge_idx,
+            ]
             self._algo_source_list = self._mgr.algorithm(
                 tensors,
                 self._source_list_spv,
                 workgroup=(max(1, math.ceil(cells.size / self._work_group_size)), 1, 1),
                 spec_consts=[],
-                push_consts=_pc_source_resident(cells.size, self._dry_tol, self.compensated),
+                push_consts=_pc_source_resident(
+                    cells.size, self._dry_tol, self.compensated, self._g, self._cfl
+                ),
             )
         else:
             np.copyto(np.asarray(self.t_source_list.data()), _f32_bits(packed))

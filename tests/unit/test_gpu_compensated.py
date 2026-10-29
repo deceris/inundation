@@ -27,13 +27,14 @@ if TYPE_CHECKING:
 
 pytestmark = requires_vulkan
 
-# Relative to the final volume, over 3000-7300 steps on the valley. The
+# Relative to the final volume, over a few thousand steps on the valley. The
 # compensated path is left with the float32 rounding of the per-cell flux sums
 # (measured 3e-10 to 7e-10); the plain path loses whole increments below half
-# an ulp of the depth (measured 7e-7 to 5e-6). With MoltenVK fast math on the
-# compensated path reads 1e-7 to 5e-7: the solver turns fast math off.
+# an ulp of the depth (measured 9e-8 to 5e-6, fewer steps at a higher Courant
+# number mean less drift). With MoltenVK fast math on the compensated path
+# reads 1e-7 to 5e-7: the solver turns fast math off.
 REL_COMPENSATED = 3e-9
-REL_PLAIN_AT_LEAST = 1e-7
+REL_PLAIN_AT_LEAST = 3e-8
 
 
 @pytest.fixture(scope="module")
@@ -109,6 +110,28 @@ class TestConservation:
         solver = make_solver(h0, compensated=False)
         run(solver, t_end, source_rate=src)
         assert abs(_volume_error(solver, grid, h0, src, t_end)) > REL_PLAIN_AT_LEAST
+
+
+class TestPositivity:
+    def test_point_source_into_a_dry_cell_creates_no_clamp_mass(
+        self, grid: MeshGeometry, make_solver: Callable[..., Any]
+    ) -> None:
+        # The next dt is planned before the source adds its water; a strong
+        # point source into a thin cell must still not drive the cell below
+        # zero (the source kernel bounds dt by the cell's post-source state).
+        src = point_source(grid, 2.0, NX * DX * 0.2, NY * DX / 2)
+        solver = make_solver(np.zeros(grid.N, dtype=np.float32), compensated=True)
+        solver.run(
+            t_end=20.0,
+            output_interval_s=20.0,
+            dt_max=1.0,
+            dt_init=0.01,
+            cfl_interval=1,
+            progress=False,
+            source_rate=src,
+        )
+        clamp = float(solver.download_clamp_mass().astype(np.float64).sum())
+        assert clamp == 0.0
 
 
 class TestPair:

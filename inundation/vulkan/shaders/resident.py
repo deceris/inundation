@@ -582,11 +582,15 @@ layout(local_size_x = 256) in;
     + """\
 layout(set=0, binding=19) buffer SRC    { uint src_u[]; };
 layout(set=0, binding=24) buffer HLO    { float h_lo[]; };
+layout(set=0, binding=25) buffer CPTR   { uint  cptr[];  };
+layout(set=0, binding=26) buffer CIDX   { uint  cidx[];  };
 
 layout(push_constant) uniform PC {
     uint  num_sources;
     float dry_tol;
     float compensate;
+    float g;
+    float cfl_number;
 } pc;
 
 """
@@ -610,6 +614,19 @@ void main() {
     h[i] = h_new;
     if (h_new >= pc.dry_tol) {
         blk[BLK_WORDS * block_of(i) + BLK_WET] = 1u;
+        // The next step's dt was bounded from the corrector's input state,
+        // before this water arrived: a point source into a thin cell can
+        // raise its wave speed many-fold in one step. Bound dt by this cell's
+        // own post-source state, with the dry-bed 2c on every edge (its
+        // neighbours may be dry), so the cell cannot empty below zero.
+        float u = sqrt(hu[i] * hu[i] + hv[i] * hv[i]) / h_new;
+        float speed = u + 2.0 * sqrt(pc.g * h_new);
+        float perimeter = 0.0;
+        for (uint k = cptr[i]; k < cptr[i + 1u]; ++k) { perimeter += elen[cidx[k] >> 1]; }
+        float lam = speed * perimeter;
+        if (lam > 1e-30 && area[i] > 1e-10) {
+            atomicMin(dt_buf_u[1], floatBitsToUint(pc.cfl_number * area[i] / lam));
+        }
     }
 }
 

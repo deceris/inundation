@@ -1,7 +1,6 @@
 # Solver Accuracy Fixes — Results
 
-**Status: in progress** (2026-10-29): the Courant sweep is running; its
-table and the final `CFL_DEFAULT` are still to be written. Plan: [`plan.md`](plan.md).
+**Status: done** (2026-10-29). Plan: [`plan.md`](plan.md).
 
 All measurements native on M1 Max with MoltenVK 1.4.2. GPU unit tests run on
 the 32 768-cell Hilbert-ordered valley (`tests/unit/_valley.py`).
@@ -84,10 +83,57 @@ robustness column repeats the compensated one (no numerical change).
 
 ## Courant sweep
 
-Running at the time of writing: full suite at CFL 0.45, 0.6, 0.8 and 1.0
-(`gpu_resident_batch`, `cfl_safety` 1.0). 0.45 passed every suite; 0.6 had
-passed dam break, radial dam break and floodplain depressions. Logs and
-summaries under `.tmp/bench-report/sweep-cfl-*`.
+Full suite at CFL 0.45, 0.6, 0.8 and 1.0 (`gpu_resident_batch`,
+`cfl_safety` 1.0, `--cfl` on the report runner). "Before" is the committed
+state ahead of the sweep: CFL 0.45 times the old 0.8 safety factor, 0.36
+effective. Every value passes every gate.
+
+| Suite | Metric | Before (0.36) | 0.45 | 0.6 | 0.8 | 1.0 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Radial dam break | steps | 388 | 311 | 233 | 175 | 140 |
+| Radial dam break | L1 rel | 5.11e-2 | 5.11e-2 | 5.11e-2 | 5.11e-2 | 5.12e-2 |
+| Floodplain depressions | steps | 213 321 | 176 664 | 140 004 | 112 516 | 96 025 |
+| Floodplain depressions | ponded storage | 0.999 | 0.999 | 0.999 | 0.999 | 0.999 |
+| Momentum obstruction | steps | 8 505 | 6 911 | 5 314 | 4 112 | 3 398 |
+| Momentum obstruction | point 2 depth [m] | 0.0471 | 0.0472 | 0.0473 | 0.0474 | 0.0475 |
+| Flood propagation | steps | 126 449 | 107 127 | 87 929 | 73 437 | 64 799 |
+| Flood propagation | arrival err rel | 6.26e-2 | 6.26e-2 | 5.88e-2 | 5.88e-2 | 5.88e-2 |
+| Flood propagation | depth L1 rel | 2.59e-2 | 2.56e-2 | 2.52e-2 | 2.46e-2 | 2.40e-2 |
+| Flood propagation | speed L1 rel | 1.27e-2 | 1.30e-2 | 1.35e-2 | 1.42e-2 | 1.48e-2 |
+
+The 1D dam breaks are capped by `dt_max` and take 1 001 steps at every
+value. Volume drift stays at 1e-11 to 4e-9 throughout; no case shows a
+negative depth or a clamp contribution.
+
+`CFL_DEFAULT` is now 0.8: 1.9x fewer steps than before on the EA cases, with
+a margin below the positivity limit of 1.0 for terrain the sweep did not
+cover (the Nysa case is the first thing to run at the new default). 1.0 is
+available through `WorkflowConfig.cfl`.
+
+### Sources and the planned dt
+
+The resident path plans the next dt from the corrector's input state, before
+the source kernel adds its water. At 0.36 that lag was hidden by the margin;
+at 0.6 and above a point source of 0.2 m³/s into a dry 1 m² cell with the dt
+capped at 1 s drove the cell and its neighbours below zero, and the clamp
+created 3.8 %, 12.7 % and 22 % of the injected volume at 0.6, 0.8 and 1.0.
+The gate suites never clamped because their sources are spread over many
+cells. The source kernel now bounds the next dt by each source cell's
+post-source state (`(|u| + 2c) × perimeter`, dry-bed speed on every edge);
+the clamp mass is zero again at 0.8 and the step count on the EA suites is
+unchanged within noise.
+
+## Lake at rest
+
+Final code, `CFL_DEFAULT` 0.8, variants A/B × friction minimal/production,
+600 s:
+
+| Backend | max abs u [m/s] | volume drift rel |
+| --- | ---: | ---: |
+| `fixed_dt_batch_barrier` | 1.1e-5 to 1.5e-5 | 1.3e-7 |
+| `gpu_resident_batch` | 8.3e-6 to 1.3e-5 | 0 |
+
+Before this effort the same cases read 2e-5 to 9e-5 m/s.
 
 ## Unit tests
 

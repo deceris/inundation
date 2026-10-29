@@ -25,7 +25,12 @@ MIN_POLYGON_VERTICES = 3
 # ── Physical and numerical solver defaults ────────────────────────────────────
 GRAVITY_G = 9.81
 DRY_TOL_DEFAULT = 1e-4
-CFL_DEFAULT = 0.45
+# dt_i = CFL * A_i / sum_j(max|S_j| * len_j) over the cell's edges, with the
+# wave speeds the flux assumed. In this form the HLL positivity limit is 1.0;
+# the five gate suites pass at 0.45, 0.6, 0.8 and 1.0 with flat accuracy
+# metrics (docs/implementation/24-solver-accuracy-fixes/results.md). 0.8 keeps
+# a margin below the limit on terrain the sweep did not cover.
+CFL_DEFAULT = 0.8
 REGIME_DRY = 2
 
 # ── Vulkan solver ─────────────────────────────────────────────────────────────

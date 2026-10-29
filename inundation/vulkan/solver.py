@@ -126,7 +126,7 @@ class SWESolver:
     dry_tol : float
         Depth below which a cell is considered dry.  Default 1e-4.
     cfl : float
-        CFL safety factor.  Default 0.45.
+        CFL number.  Default ``CFL_DEFAULT`` (0.8).
     workgroup_size : int
         GPU workgroup size.  Default 256.
 

@@ -172,3 +172,20 @@ remains the host-driven reference. Element counts reach the shaders as
 `build_geometry` rejects cells at or below the CFL kernels' area floor.
 Evidence:
 [`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
+
+## Courant number 0.8 on the resident backend
+
+`gpu_resident_batch` recomputes the CFL bound every step from the wave
+speeds the flux assumed, so the 0.8 safety factor it inherited from the
+batch backends (which reuse one dt for several steps) is gone and the CFL
+number is its only knob. In the solver's perimeter-sum form the HLL
+positivity limit is 1.0. A sweep of the five gate suites passes at 0.45,
+0.6, 0.8 and 1.0 with accuracy metrics flat within the gates' resolution and
+step counts falling in proportion. `CFL_DEFAULT` is 0.8, 1.9x fewer steps
+than the previous effective 0.36, keeping a margin below the limit for
+terrain the sweep did not cover; 1.0 remains a configuration choice. The
+sweep exposed that the next dt was planned before the sources added their
+water; the source kernel now bounds it by each source cell's post-source
+state, so a point source into a thin cell cannot drive it negative.
+Evidence:
+[`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
