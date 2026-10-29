@@ -1,6 +1,9 @@
 """CFL and time-control shader sources for SWE solver."""
 
-CFL_ACCUM_GLSL = """\
+from .flux import HLLC_GLSL
+
+CFL_ACCUM_GLSL = (
+    """\
 #version 450
 #extension GL_EXT_shader_atomic_float : require
 
@@ -34,6 +37,9 @@ layout(push_constant) uniform PC {
     float cfl_number;
 } pc;
 
+"""
+    + HLLC_GLSL
+    + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
     if (eid >= uint(pc.num_edges)) return;
@@ -44,27 +50,27 @@ void main() {
     float ny_ = eny[eid];
     float len = elen[eid];
 
-    float hL  = max(h[cL], 0.0);
-    float cWL = sqrt(pc.g * hL);
-    float unL = (hL > pc.dry_tol) ? (hu[cL]*nx_ + hv[cL]*ny_) / hL : 0.0;
-    float sL  = abs(unL) + cWL;
-
-    float sR;
-    if (cR >= 0) {
-        float hR  = max(h[cR], 0.0);
-        float cWR = sqrt(pc.g * hR);
-        float unR = (hR > pc.dry_tol) ? (hu[cR]*nx_ + hv[cR]*ny_) / hR : 0.0;
-        sR = abs(unR) + cWR;
+    float hL = h[cL], huL = hu[cL], hvL = hv[cL], zbL = zb[cL];
+    float hR, huR, hvR, zbR;
+    if (cR < 0) {
+        hR  = hL;
+        huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
+        hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
+        zbR = zbL;
     } else {
-        sR = sL;
+        hR = h[cR]; huR = hu[cR]; hvR = hv[cR]; zbR = zb[cR];
     }
+    // A fully dry edge carries no flux and no CFL constraint, as in the flux
+    // kernels: a cell whose edges are all dry gets no dt estimate at all.
+    if (hL < pc.dry_tol && hR < pc.dry_tol) return;
 
-    float contrib = max(sL, sR) * len;
+    float contrib = wave_bound(hL, huL, hvL, zbL, hR, huR, hvR, zbR, nx_, ny_) * len;
     atomicAdd(cfl_scratch[cL], contrib);
     if (cR >= 0) { atomicAdd(cfl_scratch[cR], contrib); }
 }
 
 """
+)
 
 CFL_REDUCE_GLSL = """\
 #version 450

@@ -28,7 +28,10 @@ if TYPE_CHECKING:
 
 pytestmark = requires_vulkan
 
-ATOL_H = 1e-5
+# The atomic path sums in a different order each run, which can move a cell
+# across the dry threshold in one run and not the other; the few cells that
+# flip differ by up to ~1e-4 m, the rest by float32 noise.
+ATOL_H = 1e-4
 
 
 @pytest.fixture(scope="module")
@@ -105,7 +108,7 @@ class TestSameResults:
     def test_draining_leaves_dry_cells_behind(
         self, grid: MeshGeometry, make_solver: Callable[..., Any]
     ) -> None:
-        # Upstream cells dry and keep half their momentum for a while.
+        # Upstream cells dry out during the run.
         h0 = sheet(grid)
         on, off = make_solver(h0, active_set=True), make_solver(h0, active_set=False)
         snaps_on, snaps_off = run(on, 400.0), run(off, 400.0)
@@ -155,12 +158,12 @@ class TestSkippedBlocks:
         snaps_on, snaps_off = run(on, 30.0), run(off, 30.0)
         _assert_same(on, off, snaps_on, snaps_off)
 
-    def test_dry_cells_keep_decaying_their_momentum(
+    def test_dry_cells_with_momentum_are_cleared_not_frozen(
         self, grid: MeshGeometry, spv: dict[str, bytes]
     ) -> None:
-        # Dry cells with momentum, far from the water: the full step halves
-        # their momentum every step, so their blocks must stay active until it
-        # reaches zero rather than freeze it after the first step.
+        # Dry cells with momentum, far from the water: the full step clears
+        # their momentum on its first step, so their blocks must be active for
+        # that step rather than freeze the momentum in place.
         from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
         h0 = dam(grid)
@@ -177,7 +180,7 @@ class TestSkippedBlocks:
         on, off = solvers
         assert on.steps_total > 3
         _assert_same(on, off, [], [])
-        assert float(np.abs(on.download_hu()[far]).max()) < 0.1 / 2**3
+        assert float(np.abs(on.download_hu()[far]).max()) == 0.0
 
 
 class TestFlags:
@@ -195,12 +198,11 @@ class TestFlags:
         assert flags[live_blocks, 1].all()
         assert flags[:, 1].sum() < flags.shape[0]
 
-    def test_blocks_go_inactive_once_momentum_has_decayed(
+    def test_blocks_go_inactive_once_momentum_is_cleared(
         self, grid: MeshGeometry, spv: dict[str, bytes]
     ) -> None:
-        # No water anywhere, momentum in one region: the full step halves it
-        # until it underflows to zero, after which nothing is left to compute
-        # and every mark must have been cleared.
+        # No water anywhere, momentum in one region: the first step clears it,
+        # after which nothing is left to compute and every mark must be gone.
         from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
         zeros = np.zeros(grid.N, dtype=np.float32)

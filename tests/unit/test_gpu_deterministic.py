@@ -26,7 +26,9 @@ if TYPE_CHECKING:
 
 pytestmark = requires_vulkan
 
-ATOL_H = 1e-5
+# Against the atomic path only: its summation order can move a cell across the
+# dry threshold, and the few cells that flip differ by up to ~1e-4 m.
+ATOL_H = 1e-4
 
 
 @pytest.fixture(scope="module")

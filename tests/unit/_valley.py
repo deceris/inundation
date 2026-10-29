@@ -21,7 +21,8 @@ MANNING = 0.03
 DRY_TOL = 1e-3
 
 
-def valley_grid() -> MeshGeometry:
+def valley_grid(datum: float = 0.0) -> MeshGeometry:
+    """The valley, with its bed raised by ``datum`` (a bed near 300 m is typical terrain)."""
     from inundation.mesh.geometry import build_geometry, hilbert_reorder
 
     xs, ys = np.meshgrid(np.arange(NX + 1) * DX, np.arange(NY + 1) * DX)
@@ -40,7 +41,7 @@ def valley_grid() -> MeshGeometry:
     )
     cx = (np.arange(NX * NY) % NX + 0.5) * DX
     cy = (np.arange(NX * NY) // NX + 0.5) * DX
-    zb = (-0.002 * cx - 0.3 * np.exp(-(((cy - NY * DX / 2) / (0.2 * NY * DX)) ** 2))).astype(
+    zb = (datum - 0.002 * cx - 0.3 * np.exp(-(((cy - NY * DX / 2) / (0.2 * NY * DX)) ** 2))).astype(
         np.float32
     )
     geom = build_geometry(verts, faces, zb_from_file=zb)

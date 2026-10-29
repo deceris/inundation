@@ -107,9 +107,16 @@ void main() {
     } else {
         // Heun average: y_{n+1} = 0.5*(y_n + y**)
         // h[i] still holds y_n; h_new = y* + dt*f(y*) = y**
-        h[i]  = 0.5 * (h[i]  + h_new);
-        hu[i] = 0.5 * (hu[i] + hu_new);
-        hv[i] = 0.5 * (hv[i] + hv_new);
+        float hf  = 0.5 * (h[i]  + h_new);
+        float huf = 0.5 * (hu[i] + hu_new);
+        float hvf = 0.5 * (hv[i] + hv_new);
+        // A cell that ends the step dry carries no momentum. The stage results
+        // zeroed theirs; averaging in the start-of-step value would leave half
+        // of it behind, to re-enter the flow when the cell wets again.
+        if (hf < pc.dry_tol) { huf = 0.0; hvf = 0.0; }
+        h[i]  = hf;
+        hu[i] = huf;
+        hv[i] = hvf;
     }
 }
 
@@ -201,9 +208,13 @@ void main() {
         hu1[i] = hu_new;
         hv1[i] = hv_new;
     } else {
-        h[i]  = 0.5 * (h[i]  + h_new);
-        hu[i] = 0.5 * (hu[i] + hu_new);
-        hv[i] = 0.5 * (hv[i] + hv_new);
+        float hf  = 0.5 * (h[i]  + h_new);
+        float huf = 0.5 * (hu[i] + hu_new);
+        float hvf = 0.5 * (hv[i] + hv_new);
+        if (hf < pc.dry_tol) { huf = 0.0; hvf = 0.0; }
+        h[i]  = hf;
+        hu[i] = huf;
+        hv[i] = hvf;
     }
 }
 

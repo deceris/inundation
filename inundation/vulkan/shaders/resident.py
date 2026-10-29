@@ -146,14 +146,6 @@ layout(push_constant) uniform PC {
 """
         + HLLC_GLSL
         + """\
-// Wave-speed bound of one cell's raw (unreconstructed) state along the edge
-// normal: the same |u_n| + sqrt(g h) that CFL_ACCUM_GLSL uses.
-float wave_speed(float h_, float hu_, float hv_, float nx_, float ny_) {
-    float hp = max(h_, 0.0);
-    float un = (hp > pc.dry_tol) ? (hu_ * nx_ + hv_ * ny_) / hp : 0.0;
-    return abs(un) + sqrt(pc.g * hp);
-}
-
 // The corrector reads the predictor state, except in an inactive block: its
 // predictor state was not computed this step and is stale, and the full step
 // would have left it equal to the start-of-step state.
@@ -212,28 +204,12 @@ void main() {
     // The gather update applies the same test and skips them.
     if (hL < pc.dry_tol && hR < pc.dry_tol) return;
 
+    float hLs, hqnL, hqtL, hRs, hqnR, hqtR;
+    face_states(hL, huL, hvL, zbL, hR, huR, hvR, zbR, nx_, ny_,
+                hLs, hqnL, hqtL, hRs, hqnR, hqtR);
 
-    float z_face = max(zbL, zbR);
-    float hLs    = max(0.0, hL + zbL - z_face);
-    float hRs    = max(0.0, hR + zbR - z_face);
-
-    float uL = safe_vel(hL, huL);
-    float vL = safe_vel(hL, hvL);
-    float uR = safe_vel(hR, huR);
-    float vR = safe_vel(hR, hvR);
-
-    float huLs = hLs * uL;
-    float hvLs = hLs * vL;
-    float huRs = hRs * uR;
-    float hvRs = hRs * vR;
-
-    float hqnL =  huLs * nx_ + hvLs * ny_;
-    float hqtL = -huLs * ny_ + hvLs * nx_;
-    float hqnR =  huRs * nx_ + hvRs * ny_;
-    float hqtR = -huRs * ny_ + hvRs * nx_;
-
-    float Fh, Fhn, Fht;
-    hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht);
+    float Fh, Fhn, Fht, Smax;
+    hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
 
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
@@ -246,12 +222,10 @@ void main() {
 """
         + (_FLUX_ACCUM_GATHER if gather else _FLUX_ACCUM_ATOMIC)
         + """
-    // Corrector only: accumulate the next step's CFL bound from this stage's
-    // input state. A wall mirrors the left state, so its speed equals sL.
+    // Corrector only: accumulate the next step's CFL bound from the wave
+    // speeds this stage's flux assumed.
     if (pc.stage > 0.5) {
-        float sL = wave_speed(hL, huL, hvL, nx_, ny_);
-        float sR = wave_speed(hR, huR, hvR, nx_, ny_);
-        float contrib = max(sL, sR) * len;
+        float contrib = Smax * len;
 """
         + (_FLUX_CFL_GATHER if gather else _FLUX_CFL_ATOMIC)
         + """\
@@ -398,13 +372,16 @@ void main() {
         float hf  = 0.5 * (h[i]  + h_new);
         float huf = 0.5 * (hu[i] + hu_new);
         float hvf = 0.5 * (hv[i] + hv_new);
+        // A cell that ends the step dry carries no momentum. The stage results
+        // zeroed theirs; averaging in the start-of-step value would leave half
+        // of it behind, to re-enter the flow when the cell wets again.
+        if (hf < pc.dry_tol) { huf = 0.0; hvf = 0.0; }
         h[i]  = hf;
         hu[i] = huf;
         hv[i] = hvf;
 
-        // Keep the block live for the next step while a cell is wet or still
-        // carries momentum (a cell that just dried keeps half of it).
-        if (hf >= pc.dry_tol || huf != 0.0 || hvf != 0.0) {
+        // Keep the block live for the next step while a cell is wet.
+        if (hf >= pc.dry_tol) {
             blk[BLK_WORDS * b + BLK_WET] = 1u;
         }
 
@@ -425,7 +402,8 @@ UPDATE_RESIDENT_GATHER_GLSL = _update_resident(gather=True)
 
 # Prologue CFL bound for the gather path: each edge's wave-speed term (as in
 # CFL_ACCUM_GLSL) into binding 24, then each cell sums its edges in CSR order
-# and reduces into dt slot 0 (as CFL_REDUCE_GLSL does).
+# and reduces into dt slot 0 (as CFL_REDUCE_GLSL does). The gather reads every
+# edge, so a fully dry edge writes zero rather than nothing.
 CFL_EDGE_GATHER_GLSL = (
     """\
 #version 450
@@ -443,20 +421,32 @@ layout(push_constant) uniform PC {
     float dry_tol;
 } pc;
 
-float wave_speed(int c, float nx_, float ny_) {
-    float hp = max(h[c], 0.0);
-    float un = (hp > pc.dry_tol) ? (hu[c] * nx_ + hv[c] * ny_) / hp : 0.0;
-    return abs(un) + sqrt(pc.g * hp);
-}
-
+"""
+    + HLLC_GLSL
+    + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
     if (eid >= uint(pc.num_edges)) return;
     int cL = ecL[eid];
     int cR = ecR[eid];
-    float sL = wave_speed(cL, enx[eid], eny[eid]);
-    float sR = (cR >= 0) ? wave_speed(cR, enx[eid], eny[eid]) : sL;
-    ef[EF_WORDS * eid + EF_CFL] = max(sL, sR) * elen[eid];
+    float nx_ = enx[eid];
+    float ny_ = eny[eid];
+
+    float hL = h[cL], huL = hu[cL], hvL = hv[cL], zbL = zb[cL];
+    float hR, huR, hvR, zbR;
+    if (cR < 0) {
+        hR  = hL;
+        huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
+        hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
+        zbR = zbL;
+    } else {
+        hR = h[cR]; huR = hu[cR]; hvR = hv[cR]; zbR = zb[cR];
+    }
+    float contrib = 0.0;
+    if (hL >= pc.dry_tol || hR >= pc.dry_tol) {
+        contrib = wave_bound(hL, huL, hvL, zbL, hR, huR, hvR, zbR, nx_, ny_) * elen[eid];
+    }
+    ef[EF_WORDS * eid + EF_CFL] = contrib;
 }
 
 """
