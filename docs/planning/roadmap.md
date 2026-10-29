@@ -9,13 +9,17 @@ and reproducible analytical benchmarks.
 
 All retained analytical and EA gates pass with the MoltenVK reference. Grid
 convergence shows expected profile order and confirms Test 4 front bias shrinks
-with resolution. Its mass drift changes sign with mesh and stopping time; the
-positivity clamp contributes exactly zero.
+with resolution. The float32 mass drift is understood and removed on the
+resident backend: increments below half an ulp of the depth were rounded
+away, and the compensated depth pair keeps them
+([effort 24](../implementation/24-solver-accuracy-fixes/results.md)).
 
 ## Priorities
 
-1. Build a float64 state reference for the measured mass-drift cases.
-2. Use the reference to distinguish float32 arithmetic from discretization.
+1. Re-run the Nysa 24 h case with the compensated depth and the new Courant
+   default; the 1.26 % deficit should be gone and the step count lower.
+2. Second-order spatial reconstruction (MUSCL), or forward Euler in place of
+   Heun: the scheme is first order in space with a second-order integrator.
 3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
 ## Invariants

@@ -1,8 +1,11 @@
 # SWE Solver Architecture
 
 The solver advances the shallow-water equations on an unstructured mesh with
-HLLC fluxes and SSP-RK2 integration. NumPy loads and preprocesses geometry;
-Vulkan/Kompute executes the timestep kernels.
+HLLC fluxes (Roe-average wave speeds on wet faces, Toro's dry-bed speeds on
+wet-dry faces), Audusse hydrostatic reconstruction from per-edge bed steps,
+semi-implicit Manning friction and SSP-RK2 integration. The CFL bound is the
+largest wave speed the flux assumed on each edge. NumPy loads and preprocesses
+geometry; Vulkan/Kompute executes the timestep kernels.
 
 ## Pipeline
 
@@ -14,9 +17,11 @@ Vulkan/Kompute executes the timestep kernels.
    synchronization strategy.
 5. Download snapshots at time- or step-based cadence.
 
-`fixed_dt_batch_barrier` is the validated barrier-based reference.
-`gpu_resident_batch` keeps control state on the device to reduce host
-synchronization.
+`gpu_resident_batch` is the default: simulated time, dt and the active set
+stay on the device, flux sums are gathered in a fixed order, and the depth is
+an exact float32 pair updated with error-free transforms so the volume balance
+is exact up to the positivity clamp. `fixed_dt_batch_barrier` is the
+host-driven barrier reference.
 
 ## Synchronization
 

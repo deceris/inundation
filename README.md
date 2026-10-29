@@ -101,6 +101,11 @@ If `patch` is unavailable, install the Xcode command-line tools with
 `kp.Manager()` round trip against MoltenVK and installs the patched binding in
 `.venv`.
 
+MoltenVK compiles shaders with Metal fast math by default, which breaks the
+error-free arithmetic of the compensated depth update (see `Backends`). The
+solver sets `MVK_CONFIG_FAST_MATH_ENABLED=0` before it creates the Vulkan
+instance unless the variable is already set; it costs nothing measurable.
+
 Run checks natively by bypassing the Docker prefix:
 
 ```sh
@@ -380,19 +385,22 @@ Select a backend with `WorkflowConfig.solver_impl`:
 
 | Backend | Use |
 | --- | --- |
-| `baseline` | Default compatibility and debugging path. |
-| `fixed_dt_batch_barrier` | Validated correctness reference with explicit dispatch barriers. |
+| `gpu_resident_batch` | Default. Time, dt and the active set stay on the device; deterministic flux sums; compensated depth. Constant per-phase sources. |
+| `fixed_dt_batch_barrier` | Host-driven reference with explicit dispatch barriers, for correctness comparisons. |
+| `baseline` | One host synchronisation per dispatch; debugging only. |
 | `device_cfl` | GPU-side CFL resolution with a host-driven timestep loop. |
-| `gpu_resident_batch` | Preferred production candidate for constant per-phase sources after target-driver validation; minimizes host synchronization. |
 
-`gpu_resident_batch` advances time on the device. Choose output intervals that
-are well represented by the backend's float32 clock; validate snapshot cadence
-on the target Vulkan driver. Use `fixed_dt_batch_barrier` for correctness
-comparisons and `baseline` for debugging.
+`gpu_resident_batch` keeps simulated time as an integer tick count (2⁻²⁰ s),
+so every output lands exactly on its time. Its depth is an exact float32 pair
+updated with error-free transforms (`WorkflowConfig.compensated`, default on),
+which keeps the volume balance exact up to the positivity clamp;
+`WorkflowConfig.deterministic` (default on) makes repeat runs bit-identical
+on one device and driver.
 
 The remaining implementations are retained for benchmark and advanced
-comparison use. Validate backend behavior on the target Vulkan driver before
-using a performance-oriented path in production.
+comparison use. `fixed_dt_batch` raced (no barriers between dependent
+dispatches) and refuses to run. Validate backend behavior on the target
+Vulkan driver before using a performance-oriented path in production.
 
 `hu_final` and `hv_final` are needed to write a complete warm-start state.
 Momentum snapshots require `capture_momentum_snapshots=True` and backend
