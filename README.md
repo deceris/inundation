@@ -104,7 +104,7 @@ If `patch` is unavailable, install the Xcode command-line tools with
 MoltenVK compiles shaders with Metal fast math by default, which breaks the
 error-free arithmetic of the compensated depth update (see `Backends`). The
 solver sets `MVK_CONFIG_FAST_MATH_ENABLED=0` before it creates the Vulkan
-instance unless the variable is already set; it costs nothing measurable.
+instance unless the variable is already set, which adds about 7 % per step.
 
 Run checks natively by bypassing the Docker prefix:
 

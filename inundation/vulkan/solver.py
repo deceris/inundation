@@ -50,8 +50,8 @@ if TYPE_CHECKING:
 # error-free transforms of the compensated depth update are reassociated away
 # and the update leaks mass at ~1e-7 relative instead of ~1e-9. Read when the
 # Vulkan instance is created, so it is set before the first kp.Manager(). A
-# value already in the environment wins. No effect on other drivers, and no
-# measurable cost on MoltenVK (0.293 vs 0.297 ms per step on a 32 k valley).
+# value already in the environment wins. No effect on other drivers; costs
+# about 7 % per step on MoltenVK (interleaved runs on a 32 k wet valley).
 _MOLTENVK_FAST_MATH_VAR = "MVK_CONFIG_FAST_MATH_ENABLED"
 
 

@@ -17,10 +17,14 @@ away, and the compensated depth pair keeps them
 ## Priorities
 
 1. Re-run the Nysa 24 h case with the compensated depth and the new Courant
-   default; the 1.26 % deficit should be gone and the step count lower.
-2. Second-order spatial reconstruction (MUSCL), or forward Euler in place of
+   default, and compare depths and flood extent against a CFL 0.4 run. The
+   1.26 % deficit should be gone; CFL 0.8 is unproven on real terrain, and 0.6
+   is the fallback.
+2. Run the unit and gate suites on the NVIDIA production path, where `precise`
+   stays on and the fast-math setting does not apply.
+3. Second-order spatial reconstruction (MUSCL), or forward Euler in place of
    Heun: the scheme is first order in space with a second-order integrator.
-3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
+4. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
 ## Invariants
 

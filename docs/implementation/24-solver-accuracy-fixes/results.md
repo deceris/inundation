@@ -50,14 +50,13 @@ The plain drift has one sign per case and grows with the step count; the
 compensated residual is the float32 rounding of the per-cell flux sums. The
 gather and atomic paths agree. The middle column is MoltenVK's default: its
 fast math reassociates the two-sum, and the `precise` qualifier does not stop
-it in the on-demand mode. Fast math off costs nothing measurable: 0.293 vs
-0.297 ms per step on the 32 k valley, active set off.
+it in the on-demand mode. See "Cost per step" for what this costs.
 
 Forcing a wall edge's mass flux to exactly zero took the draining sheet from
 +2.2e-8 to −2.8e-9 (fast math on); the mirrored Riemann problem had left a
 flux of a few ulp with the sign of the flow.
 
-Unit test gates: compensated < 3e-9, plain > 1e-7, both on these three cases.
+Unit test gates: compensated < 3e-9, plain > 3e-8, both on these three cases.
 
 ## Gates
 
@@ -67,21 +66,21 @@ metrics, `gpu_resident_batch`:
 
 | Suite | Metric | Before | Fronts | Bed steps | Compensated | Robustness | Final (CFL 0.8) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Dam break (Ritter) | volume drift rel | 1.6e-7 | 1.6e-7 | 1.6e-7 | 2.1e-11 | 2.1e-11 | 1.3e-11 |
-| Dam break (Ritter) | L1 rel | 8.62e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 |
-| Radial dam break | volume drift rel | 3.5e-8 | 3.5e-8 | 3.5e-8 | 1.2e-11 | 1.2e-11 | 2.3e-11 |
-| Floodplain depressions | volume drift rel | 1.0e-4 | 1.0e-4 | 1.5e-4 | 2.2e-9 | 2.2e-9 | 3.8e-9 |
-| Floodplain depressions | steps | 215 469 | 213 323 | 213 328 | 213 321 | 213 321 | 112 551 |
-| Momentum obstruction | volume drift rel | 9.3e-8 | 9.3e-8 | 9.3e-8 | 2.5e-8 | 2.5e-8 | 2.8e-8 |
-| Momentum obstruction | point 2 depth [m] | 0.04694 | 0.04714 | 0.04714 | 0.04714 | 0.04714 | 0.04740 |
-| Flood propagation | volume drift rel | 2.6e-4 | 2.6e-4 | 2.6e-4 | 2.1e-8 | 2.1e-8 | 2.3e-8 |
-| Flood propagation | arrival err rel | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 5.88e-2 |
+| Dam break (Ritter) | volume drift rel | 1.6e-7 | 1.6e-7 | 1.6e-7 | 2.1e-11 | 2.1e-11 | 1.7e-11 |
+| Dam break (Ritter) | L1 rel | 8.62e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-03 |
+| Radial dam break | volume drift rel | 3.5e-8 | 3.5e-8 | 3.5e-8 | 1.2e-11 | 1.2e-11 | 2.0e-11 |
+| Floodplain depressions | volume drift rel | 1.0e-4 | 1.0e-4 | 1.5e-4 | 2.2e-9 | 2.2e-9 | 3.1e-09 |
+| Floodplain depressions | steps | 215 469 | 213 323 | 213 328 | 213 321 | 213 321 | 112 550 |
+| Momentum obstruction | volume drift rel | 9.3e-8 | 9.3e-8 | 9.3e-8 | 2.5e-8 | 2.5e-8 | 2.5e-08 |
+| Momentum obstruction | point 2 depth [m] | 0.04694 | 0.04714 | 0.04714 | 0.04714 | 0.04714 | 0.04736 |
+| Flood propagation | volume drift rel | 2.6e-4 | 2.6e-4 | 2.6e-4 | 2.1e-8 | 2.1e-8 | 2.3e-08 |
+| Flood propagation | arrival err rel | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 5.88e-02 |
 
 The physical metrics are unchanged within the gates' resolution; the mass
 drift falls by four orders of magnitude with the compensated update. The
 robustness column repeats the compensated one (no numerical change); the
-final column is the branch head (CFL 0.8, source bound): flood propagation
-126 449 → 76 221 steps, floodplain depressions 213 321 → 112 551.
+final column is the branch head (CFL 0.8, source bound, film damping): flood
+propagation 126 449 → 76 221 steps, floodplain depressions 213 321 → 112 550.
 
 ## Courant sweep
 
@@ -104,8 +103,8 @@ effective. Every value passes every gate.
 | Flood propagation | speed L1 rel | 1.27e-2 | 1.30e-2 | 1.35e-2 | 1.42e-2 | 1.48e-2 |
 
 The 1D dam breaks are capped by `dt_max` and take 1 001 steps at every
-value. Volume drift stays at 1e-11 to 4e-9 throughout; no case shows a
-negative depth or a clamp contribution.
+value. Volume drift stays below 3e-8 throughout, which also bounds any clamp
+mass; the gate suites do not track the clamp directly.
 
 `CFL_DEFAULT` is now 0.8: 1.9x fewer steps than before on the EA cases, with
 a margin below the positivity limit of 1.0 for terrain the sweep did not
@@ -137,8 +136,111 @@ Final code, `CFL_DEFAULT` 0.8, variants A/B × friction minimal/production,
 | `fixed_dt_batch_barrier` | 1.1e-5 to 1.5e-5 | 1.3e-7 |
 | `gpu_resident_batch` | 8.3e-6 to 1.3e-5 | 0 |
 
-Before this effort the same cases read 2e-5 to 9e-5 m/s.
+The figures above are at 600 s. A same-session comparison at 120 s, variant A
+with minimal friction, `gpu_resident_batch`, shows where the gain comes from:
+
+| Commit | max abs u [m/s] |
+| --- | ---: |
+| Original | 6.7e-5 |
+| Front fixes | 7.9e-5 |
+| Bed steps | 2.5e-5 |
+| Compensated depth | 1.3e-5 |
+| Final | 1.2e-5 |
+
+All four variants improve by about 5×. Bed steps give about 3× and compensated
+depth about 2×.
+
+## Parabolic bowl
+
+`inundation/bench/parabolic_bowl.py` runs Thacker's planar solution in a
+paraboloid, which wets and dries the shoreline every period and has an exact
+answer. It is frictionless, so nothing hides thin-film errors. Three periods,
+12 runs across nx 100 to 400 at CFL 0.8 and 1.0:
+
+| Variant | Crashes | Depth L1, nx 400 | Speed L1, nx 400 | Peak film speed |
+| --- | ---: | ---: | ---: | ---: |
+| Dry-bed speeds, no film damping | 5 of 12 | 0.0915 | 0.2019 | 2.75 m/s |
+| No dry-bed speeds | 0 of 12 | 0.0916 | 0.2020 | 2.09 m/s |
+| Dry-bed speeds with film damping | 0 of 12 | 0.0855 | 0.1785 | 0.72 m/s |
+
+The original code, at nx 200 and 400, gives the same errors as the second row.
+The dry-bed speeds alone therefore bought no accuracy and added a crash: momentum
+flowing into a cell barely above `dry_tol` reached 26 000 m/s and took the CFL
+bound below one tick. None of the five gate suites reach this case. With the
+Kurganov-Petrova film damping the errors are about 7 % and 12 % lower.
+
+## Atomic path repeatability
+
+The dry-bed speeds first switched on abruptly at `dry_tol`. Float32 rounding
+could then flip a flux and shift a front: 9 of 16 atomic runs differed by
+5.9e-5 m from the gather path, and the tolerance in two test files was raised to
+1e-4 to get past it. That was wrong, and the explanation left in those comments
+was unverified and turned out false. The speeds now blend continuously over one
+to two `dry_tol`: 0 of 24 runs diverge. `ATOL_H` is back to 1e-5.
+
+A rarer transient remains on the atomic path only: up to 3.5e-5 m in a few
+cells, intermittently at CFL 0.7 to 0.85, gone by the next snapshot. Its trigger
+is not identified. The atomic comparisons allow at most 16 cells up to 5e-5 m.
+The default gather path stays bit-identical.
+
+## Deliberate breaks
+
+Each of 19 fixes was broken in a scratch worktree. 15 were caught at once. Four
+survived: a source skipping the low word, the volume ignoring the low word, the
+wall flux, and the wet-neighbour term of the source bound. New tests pin the
+first three, and the fourth was redundant and is gone. The new point-source
+positivity test fails without the source bound. Without the film damping in the
+update 5 of 6 bowl tests fail; the flux side of the damping is pinned by the
+reference parity tests.
+
+## Cost per step
+
+Interleaved runs on the 32 k fully wet valley, active set off, eight rounds. The
+fastest run of each is the figure to trust; two-repeat suite wall times on this
+machine varied by up to 2× between identical runs, so the wall times in the
+sweep above do not measure cost.
+
+| Configuration | ms per step |
+| --- | ---: |
+| Original code | 0.284 |
+| Plain, fast math on | 0.288 |
+| Plain, fast math off | 0.305 |
+| Compensated, fast math on, `precise` | 0.564 |
+| Compensated, fast math off, `precise` | 0.598 |
+
+The `precise` qualifier was almost all of that. MoltenVK gains nothing from it,
+so it is dropped on macOS and kept elsewhere. Final code, interleaved:
+
+| Configuration | Steps | Fastest ms per step | Fastest wall |
+| --- | ---: | ---: | ---: |
+| Original, effective CFL 0.36 | 2 813 | 0.192 | 0.541 s |
+| Final, CFL 0.36 | 2 812 | 0.213 | 0.599 s |
+| Final, CFL 0.8 | 1 266 | 0.226 | 0.286 s |
+
+The final code costs about 11 to 18 % more per step and is 1.9× faster for the
+same simulated time. This is a fully wet mesh; partly dry meshes were not timed
+this way.
+
+## Grid convergence
+
+Observed orders at the final kernels of the film-damping commit:
+
+| Case | Metric | Effort 19 | Now |
+| --- | --- | ---: | ---: |
+| Stoker | L1 | 0.79 | 0.79 |
+| Ritter | L1 | 0.65 | 0.65 |
+| Radial | L1 | 0.85 | 0.85 |
+| Flood propagation | Depth L1 | 1.12 | 1.14 |
+| Flood propagation | Speed L1 | 1.51 | 1.51 |
+| Flood propagation | Arrival | 0.99 | 1.06 |
+
+Flood-propagation volume drift now reads 4.8e-8, 5.0e-8, 2.3e-8, 1.3e-8 from
+coarse to fine. It no longer grows under refinement.
+
+The Ritter wet-front error rose from 12.9 % to 13.9 % at the gate resolution,
+because the damping slows the thin tip, and it does not fall under refinement
+(11.2 %, 12.7 %, 13.9 %, 13.6 % coarse to fine). The depth L1 is unchanged.
 
 ## Unit tests
 
-378 pass (299 before this effort).
+408 pass (299 before this effort).

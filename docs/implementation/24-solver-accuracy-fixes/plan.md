@@ -48,8 +48,10 @@ red.
 **Momentum.** The corrector zeroes momentum when the averaged depth is below
 dry_tol. The active-set wet test reduces to "depth at least dry_tol".
 
-**Wave speeds.** `hllc_speeds` switches to Toro's dry-bed estimates when one
-reconstructed side is below dry_tol. The flux kernels return the largest wave
+**Wave speeds.** `hllc_speeds` blends to Toro's dry-bed estimates as one
+reconstructed side falls from two to one `dry_tol`. Below four `dry_tol` the
+velocity uses the Kurganov-Petrova desingularised form and the update damps the
+stored momentum to match. The flux kernels return the largest wave
 speed they assumed, and the resident corrector accumulates the CFL bound from
 it; the prologue and host-driven CFL kernels reconstruct the face states the
 same way (`wave_bound`). One shared GLSL snippet holds reconstruction, solver
@@ -73,6 +75,8 @@ the flow), and MoltenVK compiles with Metal fast math by default and its
 on-demand mode ignores the GLSL `precise` qualifier, which reassociates the
 two-sum away. The solver sets `MVK_CONFIG_FAST_MATH_ENABLED=0` before the
 first `kp.Manager()` unless the environment sets it.
+`precise` is kept on other platforms and dropped on macOS, where it adds cost
+and protects nothing.
 
 **Robustness.** Counts are pushed as the float whose bits they are and the
 shaders declare them `uint`; every inline push-constant list goes through a
@@ -89,7 +93,8 @@ cells with area at or below `MIN_CELL_AREA` (1e-10 m², the kernels' floor).
 1. Reference step and parity tests. 2. Momentum and wave speeds. 3. Bed
 steps and cache version 5. 4. Compensated depth, wall flux, fast math.
 5. Robustness. 6. Courant sweep (`--cfl` on every harness and on the report
-runner). 7. Gates after every step; lake at rest on the result.
+runner). 7. Gates after every step; lake at rest on the result. 8. Parabolic bowl
+benchmark, deliberate breaks, interleaved timing, grid convergence.
 
 ## Out of scope
 

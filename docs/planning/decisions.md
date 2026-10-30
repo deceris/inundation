@@ -189,3 +189,24 @@ water; the source kernel now bounds it by each source cell's post-source
 state, so a point source into a thin cell cannot drive it negative.
 Evidence:
 [`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
+
+## Thin-film damping and continuous dry-bed speeds
+
+The dry-bed wave speeds blend in over one to two `dry_tol`, and velocity below
+four `dry_tol` uses the Kurganov-Petrova desingularised form, with the stored
+momentum damped to match. Abrupt speeds let rounding shift a front between runs,
+and undamped films reached 26 000 m/s and stalled the CFL bound on the parabolic
+bowl, a case no gate reached. This replaces the plain dry-bed estimates of the
+earlier entry. Removing the speeds also stopped the crashes but gave no accuracy
+gain; damping improved bowl errors by about 7 to 12 %. The accepted cost is a
+slower thin front tip: Ritter front error 12.9 % to 13.9 %. Evidence:
+[`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
+
+## Cost of compensated depth
+
+The earlier claim that disabling MoltenVK fast math has no measurable cost was
+wrong: interleaved runs show about 7 %, and the compensated update with the
+`precise` qualifier cost about 100 %. `precise` is now dropped on macOS, where
+fast math off already protects the arithmetic. It stays on other platforms, so
+the cost there is unmeasured until the update runs on NVIDIA. Evidence:
+[`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
