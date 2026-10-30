@@ -134,6 +134,73 @@ class TestPositivity:
         assert clamp == 0.0
 
 
+class TestSubUlp:
+    def test_a_source_below_half_an_ulp_is_kept_in_the_low_word(
+        self, spv: dict[str, bytes]
+    ) -> None:
+        # At 1 m depth half an ulp is 6e-8 m, more than the whole injection, so
+        # the float32 depth cannot move: only the low word can record it, and
+        # only the precise depth can report it. Flat bed, still water: no flux.
+        from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
+
+        from .test_gpu_resident_clock import N_CELLS, _point_source, _square_grid
+
+        grid = _square_grid()
+        q, duration = 1e-7, 0.5
+        h0 = np.ones(N_CELLS, dtype=np.float32)
+        zeros = np.zeros(N_CELLS, dtype=np.float32)
+        solver = SWESolverGpuResidentBatch(
+            grid, spv, h0, zeros, zeros, np.full(N_CELLS, MANNING, np.float32)
+        )
+        solver.run(
+            t_end=duration,
+            output_interval_s=duration,
+            dt_max=0.05,
+            dt_init=0.05,
+            cfl_interval=1,
+            progress=False,
+            source_rate=_point_source(q),
+        )
+        np.testing.assert_array_equal(solver.download_h(), h0)
+        area = grid.area.astype(np.float64)
+        gained = float(((solver.download_h_precise() - 1.0) * area).sum())
+        assert gained == pytest.approx(q * duration, rel=1e-3)
+
+
+class TestWall:
+    def test_a_closed_cell_keeps_its_depth_bit_for_bit(self, spv: dict[str, bytes]) -> None:
+        # One irregular triangle, walls on every side, water moving: the
+        # mirrored Riemann problems give zero mass flux only to rounding, so
+        # the depth stays exactly constant only if a wall passes exactly none.
+        from inundation.mesh.geometry import build_geometry
+        from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
+
+        verts = np.array([[0.0, 0.0], [7.3, 1.1], [2.9, 6.7]], dtype=np.float32)
+        geom = build_geometry(
+            verts, np.array([[0, 1, 2]], dtype=np.int32), zb_from_file=np.zeros(1, np.float32)
+        )
+        h0 = np.array([0.3137], dtype=np.float32)
+        solver = SWESolverGpuResidentBatch(
+            geom,
+            spv,
+            h0,
+            np.array([0.0917], dtype=np.float32),
+            np.array([-0.0531], dtype=np.float32),
+            np.full(1, MANNING, np.float32),
+        )
+        solver.compensated = False
+        solver.run(
+            t_end=2.0,
+            output_interval_s=2.0,
+            dt_max=0.01,
+            dt_init=0.01,
+            cfl_interval=1,
+            progress=False,
+        )
+        assert solver.steps_total > 100
+        np.testing.assert_array_equal(solver.download_h(), h0)
+
+
 class TestPair:
     def test_high_word_is_the_rounded_depth(
         self, grid: MeshGeometry, make_solver: Callable[..., Any]
