@@ -188,7 +188,6 @@ class TestWall:
             np.array([-0.0531], dtype=np.float32),
             np.full(1, MANNING, np.float32),
         )
-        solver.compensated = False
         solver.run(
             t_end=2.0,
             output_interval_s=2.0,
@@ -198,7 +197,8 @@ class TestWall:
             progress=False,
         )
         assert solver.steps_total > 100
-        np.testing.assert_array_equal(solver.download_h(), h0)
+        # The precise depth: a plain float32 depth would round a tiny flux away.
+        np.testing.assert_array_equal(solver.download_h_precise(), h0.astype(np.float64))
 
 
 class TestPair:
