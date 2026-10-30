@@ -617,13 +617,28 @@ void main() {
         // The next step's dt was bounded from the corrector's input state,
         // before this water arrived: a point source into a thin cell can
         // raise its wave speed many-fold in one step. Bound dt by this cell's
-        // own post-source state, with the dry-bed 2c on every edge (its
-        // neighbours may be dry), so the cell cannot empty below zero.
+        // post-source state edge by edge, as the flux bound would see it: the
+        // dry-bed 2c towards a dry neighbour, |u| + c of the faster side
+        // otherwise, so the cell cannot empty below zero.
         float u = sqrt(hu[i] * hu[i] + hv[i] * hv[i]) / h_new;
-        float speed = u + 2.0 * sqrt(pc.g * h_new);
-        float perimeter = 0.0;
-        for (uint k = cptr[i]; k < cptr[i + 1u]; ++k) { perimeter += elen[cidx[k] >> 1]; }
-        float lam = speed * perimeter;
+        float c = sqrt(pc.g * h_new);
+        float lam = 0.0;
+        for (uint k = cptr[i]; k < cptr[i + 1u]; ++k) {
+            uint s = cidx[k];
+            uint e = s >> 1;
+            int nb = ((s & 1u) != 0u) ? ecL[e] : ecR[e];
+            float speed = u + c;
+            if (nb >= 0) {
+                float hn = h[nb];
+                if (hn < pc.dry_tol) {
+                    speed = u + 2.0 * c;
+                } else {
+                    float un = sqrt(hu[nb] * hu[nb] + hv[nb] * hv[nb]) / hn;
+                    speed = max(speed, un + sqrt(pc.g * hn));
+                }
+            }
+            lam += speed * elen[e];
+        }
         if (lam > 1e-30 && area[i] > 1e-10) {
             atomicMin(dt_buf_u[1], floatBitsToUint(pc.cfl_number * area[i] / lam));
         }
