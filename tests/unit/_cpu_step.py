@@ -52,7 +52,9 @@ def hllc_speeds(
     Wet-wet faces use the Roe-average estimate. A face with a dry side uses
     Toro's dry-bed estimates (Shock-Capturing Methods for Free-Surface Shallow
     Flows, 2001, section 10.5): the wet side's rarefaction tip runs at
-    ``u - 2c`` (dry left) or ``u + 2c`` (dry right).
+    ``u - 2c`` (dry left) or ``u + 2c`` (dry right). The two blend continuously
+    as a side goes from one to two ``dry_tol`` deep: a jump would let float32
+    rounding flip a whole flux.
     """
     cL = np.sqrt(g * np.maximum(hL, 0.0))
     cR = np.sqrt(g * np.maximum(hR, 0.0))
@@ -63,13 +65,15 @@ def hllc_speeds(
     c_roe = np.sqrt(g * 0.5 * (hL + hR))
     s_l = np.minimum(unL - cL, u_roe - c_roe)
     s_r = np.maximum(unR + cR, u_roe + c_roe)
-    dry_left = (hL < dry_tol) & ~(hR < dry_tol)
-    dry_right = (hR < dry_tol) & ~(hL < dry_tol)
-    s_l = np.where(dry_left, unR - 2.0 * cR, s_l)
-    s_r = np.where(dry_left, unR + cR, s_r)
-    s_r = np.where(dry_right, unL + 2.0 * cL, s_r)
-    s_l = np.where(dry_right, unL - cL, s_l)
-    return s_l, s_r
+    wet_l = np.clip(hL / dry_tol - 1.0, 0.0, 1.0)
+    wet_r = np.clip(hR / dry_tol - 1.0, 0.0, 1.0)
+    dry_left = (1.0 - wet_l) * wet_r
+    dry_right = (1.0 - wet_r) * wet_l
+    roe = 1.0 - dry_left - dry_right
+    return (
+        roe * s_l + dry_left * (unR - 2.0 * cR) + dry_right * (unL - cL),
+        roe * s_r + dry_left * (unR + cR) + dry_right * (unL + 2.0 * cL),
+    )
 
 
 def hllc(

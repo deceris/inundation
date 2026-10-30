@@ -17,7 +17,20 @@ import numpy as np
 import pytest
 
 from ._fixtures import requires_vulkan
-from ._valley import DRY_TOL, DX, MANNING, NX, NY, dam, point_source, run, sheet, state, valley_grid
+from ._valley import (
+    DRY_TOL,
+    DX,
+    MANNING,
+    NX,
+    NY,
+    assert_close_on_atomic_path,
+    dam,
+    point_source,
+    run,
+    sheet,
+    state,
+    valley_grid,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -27,11 +40,6 @@ if TYPE_CHECKING:
     from inundation.mesh.geometry import MeshGeometry
 
 pytestmark = requires_vulkan
-
-# The atomic path sums in a different order each run, which can move a cell
-# across the dry threshold in one run and not the other; the few cells that
-# flip differ by up to ~1e-4 m, the rest by float32 noise.
-ATOL_H = 1e-4
 
 
 @pytest.fixture(scope="module")
@@ -76,7 +84,7 @@ def _assert_same(on: Any, off: Any, snaps_on: list[Any], snaps_off: list[Any]) -
             # its initial state, which the full step rewrites as +0.0.
             np.testing.assert_array_equal(a, b)
         else:
-            np.testing.assert_allclose(a, b, rtol=0, atol=ATOL_H)
+            assert_close_on_atomic_path(a, b)
 
 
 def _active_fraction(solver: Any) -> float:

@@ -84,5 +84,21 @@ def run(solver: Any, t_end: float, **kwargs: Any) -> list[NDArray[np.float32]]:
     return snaps
 
 
+# The atomic path sums in a different order each run, and at some Courant
+# numbers a thin front near a threshold lands one way or the other: a few cells
+# differ by up to 3.5e-5 m and the difference heals by the next snapshot
+# (docs/implementation/24-solver-accuracy-fixes/results.md). The gather path is
+# exact. Everything else must agree to ATOL_ATOMIC.
+ATOL_ATOMIC = 1e-5
+ATOMIC_FLIP_MAX = 5e-5
+ATOMIC_FLIP_CELLS = 16
+
+
+def assert_close_on_atomic_path(a: NDArray[np.float32], b: NDArray[np.float32]) -> None:
+    diff = np.abs(a.astype(np.float64) - b.astype(np.float64))
+    assert float(diff.max(initial=0.0)) <= ATOMIC_FLIP_MAX
+    assert int(np.count_nonzero(diff > ATOL_ATOMIC)) <= ATOMIC_FLIP_CELLS
+
+
 def state(solver: Any) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
     return solver.download_h(), solver.download_hu(), solver.download_hv()

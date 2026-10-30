@@ -15,7 +15,19 @@ import numpy as np
 import pytest
 
 from ._fixtures import requires_vulkan
-from ._valley import DX, MANNING, NX, NY, dam, point_source, run, sheet, state, valley_grid
+from ._valley import (
+    DX,
+    MANNING,
+    NX,
+    NY,
+    assert_close_on_atomic_path,
+    dam,
+    point_source,
+    run,
+    sheet,
+    state,
+    valley_grid,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,10 +37,6 @@ if TYPE_CHECKING:
     from inundation.mesh.geometry import MeshGeometry
 
 pytestmark = requires_vulkan
-
-# Against the atomic path only: its summation order can move a cell across the
-# dry threshold, and the few cells that flip differ by up to ~1e-4 m.
-ATOL_H = 1e-4
 
 
 @pytest.fixture(scope="module")
@@ -109,7 +117,7 @@ class TestRepeatable:
         ):
             np.testing.assert_array_equal(x, y)
         for x, y in zip(first, atomic, strict=True):
-            np.testing.assert_allclose(x, y, rtol=0, atol=ATOL_H)
+            assert_close_on_atomic_path(x, y)
 
 
 class TestMatchesAtomics:
@@ -123,7 +131,7 @@ class TestMatchesAtomics:
         snaps_a = run(atomic, t_end, source_rate=src)
         assert det.steps_total == atomic.steps_total
         for x, y in zip([*snaps_d, *state(det)], [*snaps_a, *state(atomic)], strict=True):
-            np.testing.assert_allclose(x, y, rtol=0, atol=ATOL_H)
+            assert_close_on_atomic_path(x, y)
 
 
 class TestEdgeBuffer:

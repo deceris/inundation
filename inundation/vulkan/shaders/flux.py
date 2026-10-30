@@ -39,7 +39,9 @@ float safe_vel(float h_, float hq) {
 // estimate. A face with a dry side uses Toro's dry-bed estimates
 // (Shock-Capturing Methods for Free-Surface Shallow Flows, 2001, s. 10.5):
 // the wet side's rarefaction tip runs at u - 2c (dry left) or u + 2c (dry
-// right), twice what the Roe average gives, and the CFL bound must see it.
+// right), twice what the Roe average gives, and the CFL bound must see it. The
+// two blend continuously as a side goes from one to two dry_tol deep: a jump
+// lets float32 rounding flip a whole flux and shift a front between runs.
 void hllc_speeds(float hL, float unL, float hR, float unR, out float SL, out float SR) {
     float cL = sqrt(pc.g * max(hL, 0.0));
     float cR = sqrt(pc.g * max(hR, 0.0));
@@ -53,10 +55,13 @@ void hllc_speeds(float hL, float unL, float hR, float unR, out float SL, out flo
     SL = min(unL - cL, u_roe - c_roe);
     SR = max(unR + cR, u_roe + c_roe);
 
-    bool dryL = hL < pc.dry_tol;
-    bool dryR = hR < pc.dry_tol;
-    if (dryL && !dryR) { SL = unR - 2.0 * cR; SR = unR + cR; }
-    if (dryR && !dryL) { SL = unL - cL; SR = unL + 2.0 * cL; }
+    float wetL = clamp(hL / pc.dry_tol - 1.0, 0.0, 1.0);
+    float wetR = clamp(hR / pc.dry_tol - 1.0, 0.0, 1.0);
+    float dryLeft  = (1.0 - wetL) * wetR;
+    float dryRight = (1.0 - wetR) * wetL;
+    float roe = 1.0 - dryLeft - dryRight;
+    SL = roe * SL + dryLeft * (unR - 2.0 * cR) + dryRight * (unL - cL);
+    SR = roe * SR + dryLeft * (unR + cR) + dryRight * (unL + 2.0 * cL);
 }
 
 // HLLC flux in the face frame; Smax is the largest wave speed it assumed.
