@@ -83,6 +83,13 @@ void main() {
         clamp_mass[i] += 0.5 * A * (h_new - h_raw);
     }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
+    // Keep the stored momentum consistent with the film velocity the flux sees.
+    float film = 4.0 * pc.dry_tol;
+    if (h_new < film) {
+        float damp = 2.0 * h_new * h_new / (h_new * h_new + film * film);
+        hu_new *= damp;
+        hv_new *= damp;
+    }
 
     if (h_new >= pc.dry_tol) {
         float n  = n_mann[i];
@@ -186,6 +193,13 @@ void main() {
         clamp_mass[i] += 0.5 * A * (h_new - h_raw);
     }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
+    // Keep the stored momentum consistent with the film velocity the flux sees.
+    float film = 4.0 * pc.dry_tol;
+    if (h_new < film) {
+        float damp = 2.0 * h_new * h_new / (h_new * h_new + film * film);
+        hu_new *= damp;
+        hv_new *= damp;
+    }
 
     if (h_new >= pc.dry_tol) {
         float n  = n_mann[i];

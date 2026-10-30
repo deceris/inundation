@@ -31,11 +31,15 @@ class State:
     hv: NDArray[np.float64]
 
 
+FILM_DEPTHS = 4.0
+
+
 def _safe_vel(
     h: NDArray[np.float64], hq: NDArray[np.float64], dry_tol: float
 ) -> NDArray[np.float64]:
-    wet = h > dry_tol
-    return np.where(wet, hq / np.where(wet, h, 1.0), 0.0)
+    """Desingularised velocity (Kurganov & Petrova 2007); ``hq / h`` above the film."""
+    e = FILM_DEPTHS * dry_tol
+    return np.where(h > dry_tol, 2.0 * h * hq / (h * h + np.maximum(h * h, e * e)), 0.0)
 
 
 def hllc_speeds(
@@ -231,6 +235,10 @@ def _stage(
     wet = h_new >= dry_tol
     hu_new = np.where(wet, hu_new, 0.0)
     hv_new = np.where(wet, hv_new, 0.0)
+    film = FILM_DEPTHS * dry_tol
+    damp = np.where(h_new < film, 2.0 * h_new * h_new / (h_new * h_new + film * film), 1.0)
+    hu_new = hu_new * damp
+    hv_new = hv_new * damp
     h_safe = np.where(wet, h_new, 1.0)
     u = hu_new / h_safe
     v = hv_new / h_safe

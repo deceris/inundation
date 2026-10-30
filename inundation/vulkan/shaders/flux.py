@@ -31,8 +31,15 @@ layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 
 # Riemann solver and face reconstruction shared by every flux and CFL kernel.
 HLLC_GLSL = """\
+// Velocity of a thin film. hq / h is singular as h falls: momentum flowing into
+// a cell barely above dry_tol reached 26 000 m/s and stalled the CFL bound. The
+// desingularised form (Kurganov & Petrova 2007) equals hq / h above FILM_DEPTHS
+// times dry_tol and damps towards zero below it.
+const float FILM_DEPTHS = 4.0;
+
 float safe_vel(float h_, float hq) {
-    return (h_ > pc.dry_tol) ? hq / h_ : 0.0;
+    float e_ = FILM_DEPTHS * pc.dry_tol;
+    return (h_ > pc.dry_tol) ? 2.0 * h_ * hq / (h_ * h_ + max(h_ * h_, e_ * e_)) : 0.0;
 }
 
 // Wave-speed bounds of the HLLC solver. A wet-wet face uses the Roe-average
