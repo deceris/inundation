@@ -210,3 +210,11 @@ wrong: interleaved runs show about 7 %, and the compensated update with the
 fast math off already protects the arithmetic. It stays on other platforms, so
 the cost there is unmeasured until the update runs on NVIDIA. Evidence:
 [`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
+
+## Nysa deficit resolved; CFL 0.8 confirmed on real terrain
+
+The 1.26 % Nysa deficit was float32 rounding of depth increments: with the
+compensated depth it reads 0.0000 % with no clamp contribution. Depths at CFL 0.8
+stay within 2.1 cm of a CFL 0.4 run at every checked time, at about half the wall
+time of effort 23, so 0.8 stays the default. Evidence:
+[`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).

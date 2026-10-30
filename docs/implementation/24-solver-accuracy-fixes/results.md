@@ -221,6 +221,39 @@ The final code costs about 11 to 18 % more per step and is 1.9× faster for the
 same simulated time. This is a fully wet mesh; partly dry meshes were not timed
 this way.
 
+## Nysa 24 h
+
+2.35 M cells, six sources, 30 m³/s peak, active set and deterministic gather on,
+commit `0fc3e28`, clamp tracking on. Single runs, M1 Max with MoltenVK:
+
+| | Effort 23 | CFL 0.8 | CFL 0.4 |
+| --- | ---: | ---: | ---: |
+| Water in domain | 3 692 242 m³ | 3 739 500 m³ | 3 739 500 m³ |
+| Deficit against 3 739 500 m³ injected | 1.26 % | 0.0000 % | 0.0000 % |
+| Clamp mass | not recorded | 3e-20 m³ | 0 |
+| Steps | 2 744 246 | 1 168 669 | 2 337 299 |
+| Wall time | 1 527 s | 785 s | 1 934 s |
+| Peak host memory | 7.8 GB | 8.2 GB | 7.7 GB |
+| Wet area, h_max above 5 cm | 5.207 km² | 5.246 km² | 5.246 km² |
+
+The deficit was float32 rounding, as suspected: it is gone with the compensated
+depth, with no clamp contribution.
+
+Depth difference against the CFL 0.4 run, cells wet in either run:
+
+| At 24 h | CFL 0.8 | Effort 23 |
+| --- | ---: | ---: |
+| Mean | 0.009 cm | 1.28 cm |
+| 99th percentile | 0.14 cm | 23 cm |
+| Maximum | 1.5 cm | 75 cm |
+| Cells differing by over 10 cm | 0 | 1 489 |
+| Flood extent mismatch | 0.0003 km² | 0.19 km² |
+
+CFL 0.8 is therefore safe on this terrain: the largest difference at any of the
+four checked times is 2.1 cm. CFL 0.4 is a converged-time reference, not the true
+flood, so the effort 23 column shows how much results moved, not its error
+against reality. At 18 h the largest such move was 1.48 m.
+
 ## Grid convergence
 
 Observed orders at the final kernels of the film-damping commit:
