@@ -65,21 +65,23 @@ Each step's commit was run through the five report suites (two repeats, one
 warm-up) from a worktree snapshot; all passed at every step. Headline
 metrics, `gpu_resident_batch`:
 
-| Suite | Metric | Before | Fronts | Bed steps | Compensated | Robustness |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Dam break (Ritter) | volume drift rel | 1.6e-7 | 1.6e-7 | 1.6e-7 | 2.1e-11 | 2.1e-11 |
-| Dam break (Ritter) | L1 rel | 8.62e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 |
-| Radial dam break | volume drift rel | 3.5e-8 | 3.5e-8 | 3.5e-8 | 1.2e-11 | 1.2e-11 |
-| Floodplain depressions | volume drift rel | 1.0e-4 | 1.0e-4 | 1.5e-4 | 2.2e-9 | 2.2e-9 |
-| Floodplain depressions | steps | 215 469 | 213 323 | 213 328 | 213 321 | 213 321 |
-| Momentum obstruction | volume drift rel | 9.3e-8 | 9.3e-8 | 9.3e-8 | 2.5e-8 | 2.5e-8 |
-| Momentum obstruction | point 2 depth [m] | 0.04694 | 0.04714 | 0.04714 | 0.04714 | 0.04714 |
-| Flood propagation | volume drift rel | 2.6e-4 | 2.6e-4 | 2.6e-4 | 2.1e-8 | 2.1e-8 |
-| Flood propagation | arrival err rel | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 |
+| Suite | Metric | Before | Fronts | Bed steps | Compensated | Robustness | Final (CFL 0.8) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dam break (Ritter) | volume drift rel | 1.6e-7 | 1.6e-7 | 1.6e-7 | 2.1e-11 | 2.1e-11 | 1.3e-11 |
+| Dam break (Ritter) | L1 rel | 8.62e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 | 8.63e-3 |
+| Radial dam break | volume drift rel | 3.5e-8 | 3.5e-8 | 3.5e-8 | 1.2e-11 | 1.2e-11 | 2.3e-11 |
+| Floodplain depressions | volume drift rel | 1.0e-4 | 1.0e-4 | 1.5e-4 | 2.2e-9 | 2.2e-9 | 3.8e-9 |
+| Floodplain depressions | steps | 215 469 | 213 323 | 213 328 | 213 321 | 213 321 | 112 551 |
+| Momentum obstruction | volume drift rel | 9.3e-8 | 9.3e-8 | 9.3e-8 | 2.5e-8 | 2.5e-8 | 2.8e-8 |
+| Momentum obstruction | point 2 depth [m] | 0.04694 | 0.04714 | 0.04714 | 0.04714 | 0.04714 | 0.04740 |
+| Flood propagation | volume drift rel | 2.6e-4 | 2.6e-4 | 2.6e-4 | 2.1e-8 | 2.1e-8 | 2.3e-8 |
+| Flood propagation | arrival err rel | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 6.26e-2 | 5.88e-2 |
 
 The physical metrics are unchanged within the gates' resolution; the mass
 drift falls by four orders of magnitude with the compensated update. The
-robustness column repeats the compensated one (no numerical change).
+robustness column repeats the compensated one (no numerical change); the
+final column is the branch head (CFL 0.8, source bound): flood propagation
+126 449 → 76 221 steps, floodplain depressions 213 321 → 112 551.
 
 ## Courant sweep
 
@@ -120,8 +122,10 @@ created 3.8 %, 12.7 % and 22 % of the injected volume at 0.6, 0.8 and 1.0.
 The gate suites never clamped because their sources are spread over many
 cells. The source kernel now bounds the next dt by each source cell's
 post-source state (`(|u| + 2c) × perimeter`, dry-bed speed on every edge);
-the clamp mass is zero again at 0.8 and the step count on the EA suites is
-unchanged within noise.
+the clamp mass is zero again at 0.8. A first version took 2c on every edge
+and cost flood propagation 113 k instead of 73 k steps (its line source
+sits in wet water); the bound now follows each neighbour's state (2c only
+towards a dry one, |u| + c of the faster side otherwise), at 76 k steps.
 
 ## Lake at rest
 
