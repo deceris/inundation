@@ -162,7 +162,7 @@ answer. It is frictionless, so nothing hides thin-film errors. Three periods,
 | Dry-bed speeds, no film damping | 5 of 12 | 0.0915 | 0.2019 | 2.75 m/s |
 | No dry-bed speeds | 0 of 12 | 0.0916 | 0.2020 | 2.09 m/s |
 | Dry-bed speeds with film damping | 0 of 12 | 0.0855 | 0.1785 | 0.72 m/s |
-| Time-scaled film damping (final) | 0 of 16 | 0.0863 | 0.1818 | 0.72 m/s |
+| Time-scaled film damping (final) | 0 of 24 | 0.0863 | 0.1818 | 0.72 m/s |
 
 The original code, at nx 200 and 400, gives the same errors as the second row.
 The dry-bed speeds alone therefore bought no accuracy and added a crash: momentum
