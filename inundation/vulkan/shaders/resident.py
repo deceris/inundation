@@ -33,6 +33,8 @@ repeated runs are bit-identical. The remaining atomics (``atomicMin`` for dt,
 block flag stores) do not depend on order.
 """
 
+import sys
+
 from .flux import HLLC_GLSL
 
 # Bindings 0-18 shared by every resident kernel. dt is declared as uint words.
@@ -302,13 +304,16 @@ layout(set=0, binding=28) buffer HLO    { float h_lo[];   };
 layout(set=0, binding=29) buffer H1LO   { float h1_lo[];  };
 """
 
-# Knuth's two-sum: s + e == a + b exactly. `precise` keeps the compiler from
-# contracting or reassociating the error term away.
-_EFT_GLSL = """\
+# Knuth's two-sum: s + e == a + b exactly. `precise` keeps a compiler from
+# reassociating the error term away. MoltenVK is the exception: its fast math
+# breaks the transforms with or without the qualifier, so the solver turns fast
+# math off there, and the qualifier alone adds about 50 % per step (0.327 against
+# 0.222 ms on a 32 k wet mesh; 0.210 ms without compensation).
+_EFT_TEMPLATE = """\
 void two_sum(float a, float b, out float s, out float e) {
-    precise float t  = a + b;
-    precise float bb = t - a;
-    precise float err = (a - (t - bb)) + (b - bb);
+    PRECISE float t  = a + b;
+    PRECISE float bb = t - a;
+    PRECISE float err = (a - (t - bb)) + (b - bb);
     s = t;
     e = err;
 }
@@ -322,6 +327,14 @@ void add_compensated(float hi, float loi, float inc, out float h_new, out float 
     if (h_new < 0.0 || (h_new == 0.0 && lo_new < 0.0)) { h_new = 0.0; lo_new = 0.0; }
 }
 """
+
+
+def error_free_glsl(platform: str) -> str:
+    """Two-sum kernels for a host platform (``sys.platform``)."""
+    return _EFT_TEMPLATE.replace("PRECISE ", "" if platform == "darwin" else "precise ")
+
+
+_EFT_GLSL = error_free_glsl(sys.platform)
 
 _UPDATE_DEPTH_PLAIN = """\
     float h_raw  = hi  - dti * sdh;

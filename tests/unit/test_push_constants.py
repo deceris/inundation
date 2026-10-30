@@ -35,8 +35,6 @@ from inundation.vulkan.gpu_resident_batch import (
     _pc_source_resident,
     _pc_step_control,
 )
-
-# pyright: reportPrivateUsage=false
 from inundation.vulkan.shaders import (
     BLOCK_DILATE_GLSL,
     BLOCK_MARK_GLSL,
@@ -57,6 +55,9 @@ from inundation.vulkan.shaders import (
     UPDATE_RESIDENT_GATHER_GLSL,
     UPDATE_RESIDENT_GLSL,
 )
+
+# pyright: reportPrivateUsage=false
+from inundation.vulkan.shaders.resident import error_free_glsl
 from inundation.vulkan.solver import (
     _pc_cfl_accum,
     _pc_cfl_reduce,
@@ -328,3 +329,13 @@ class TestCounts:
             uint_as_float_bits(2**32)
         with pytest.raises(ValueError, match="32 bits"):
             uint_as_float_bits(-1)
+
+
+class TestPreciseQualifier:
+    def test_kept_where_the_compiler_needs_it(self) -> None:
+        assert "precise float" in error_free_glsl("linux")
+
+    def test_dropped_on_moltenvk(self) -> None:
+        # It adds about 50 % per step there and does nothing: fast math is what
+        # breaks the transforms, and the solver turns that off.
+        assert "precise" not in error_free_glsl("darwin")
