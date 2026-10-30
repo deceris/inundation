@@ -10,6 +10,9 @@ where the plain float32 update drifts by a measurable amount.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -199,6 +202,65 @@ class TestWall:
         assert solver.steps_total > 100
         # The precise depth: a plain float32 depth would round a tiny flux away.
         np.testing.assert_array_equal(solver.download_h_precise(), h0.astype(np.float64))
+
+
+class TestFilm:
+    @staticmethod
+    def _decayed_momentum(spv: dict[str, bytes], dt: float) -> float:
+        from inundation.mesh.geometry import build_geometry
+        from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
+
+        verts = np.array([[0.0, 0.0], [7.3, 1.1], [2.9, 6.7]], dtype=np.float32)
+        geom = build_geometry(
+            verts, np.array([[0, 1, 2]], dtype=np.int32), zb_from_file=np.zeros(1, np.float32)
+        )
+        solver = SWESolverGpuResidentBatch(
+            geom,
+            spv,
+            np.array([2e-4], dtype=np.float32),
+            np.array([2e-5], dtype=np.float32),
+            np.zeros(1, dtype=np.float32),
+            np.full(1, 1e-4, np.float32),
+        )
+        solver.run(
+            t_end=2.0**-8,
+            output_interval_s=2.0**-8,
+            dt_max=dt,
+            dt_init=dt,
+            cfl_interval=1,
+            progress=False,
+        )
+        return float(solver.download_hu()[0])
+
+    def test_damping_does_not_depend_on_the_tick_size(self, spv: dict[str, bytes]) -> None:
+        # A film loses momentum at a rate: four times the ticks over the same
+        # simulated time must leave about the same momentum.
+        coarse = self._decayed_momentum(spv, 2.0**-10)
+        fine = self._decayed_momentum(spv, 2.0**-12)
+        assert 0.0 < fine < 2e-5
+        assert coarse == pytest.approx(fine, rel=0.15)
+
+
+class TestArithmeticGuard:
+    def test_broken_error_free_arithmetic_stops_the_run(self) -> None:
+        # With fast math on, compensation silently stops working: the solver
+        # must say so rather than leak. Subprocess: MoltenVK reads this once.
+        code = (
+            "import numpy as np\n"
+            "from tests.unit._valley import valley_grid, dam, run, MANNING\n"
+            "from inundation.workflow import _compile_solver_shaders as c\n"
+            "from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch as S\n"
+            "g = valley_grid(); z = np.zeros(g.N, np.float32)\n"
+            "s = S(g, c(), dam(g), z, z, np.full(g.N, MANNING, np.float32))\n"
+            "run(s, 1.0)\n"
+        )
+        env = {**os.environ, "MVK_CONFIG_FAST_MATH_ENABLED": "1", "PYTHONPATH": "."}
+        done = subprocess.run(  # noqa: S603
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False
+        )
+        if sys.platform == "darwin":
+            assert done.returncode != 0
+            assert "error-free" in done.stderr
 
 
 class TestPair:

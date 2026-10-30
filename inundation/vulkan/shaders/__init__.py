@@ -19,6 +19,7 @@ from .resident import (
     BLOCK_MARK_GLSL,
     CFL_EDGE_GATHER_GLSL,
     CFL_GATHER_GLSL,
+    EFT_PROBE_GLSL,
     FLUX_RESIDENT_GATHER_GLSL,
     FLUX_RESIDENT_GLSL,
     SOURCE_RESIDENT_GLSL,
@@ -89,6 +90,7 @@ def compile_all() -> dict[str, bytes]:
         ),
         "cfl_edge_gather": compile_glsl(CFL_EDGE_GATHER_GLSL, "cfl_edge_gather_kernel"),
         "cfl_gather": compile_glsl(CFL_GATHER_GLSL, "cfl_gather_kernel"),
+        "eft_probe": compile_glsl(EFT_PROBE_GLSL, "eft_probe_kernel"),
     }
 
 
@@ -101,6 +103,7 @@ __all__ = [
     "CFL_REDUCE_GLSL",
     "CFL_RESOLVE_GLSL",
     "DT_RESET_GLSL",
+    "EFT_PROBE_GLSL",
     "FLUX_DTBUF_GLSL",
     "FLUX_GLSL",
     "FLUX_RESIDENT_GATHER_GLSL",

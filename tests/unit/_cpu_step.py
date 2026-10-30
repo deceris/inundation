@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from inundation.tuning import FILM_DEPTHS
+
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
@@ -29,9 +31,6 @@ class State:
     h: NDArray[np.float64]
     hu: NDArray[np.float64]
     hv: NDArray[np.float64]
-
-
-FILM_DEPTHS = 4.0
 
 
 def _safe_vel(
@@ -236,9 +235,10 @@ def _stage(
     hu_new = np.where(wet, hu_new, 0.0)
     hv_new = np.where(wet, hv_new, 0.0)
     film = FILM_DEPTHS * dry_tol
-    damp = np.where(h_new < film, 2.0 * h_new * h_new / (h_new * h_new + film * film), 1.0)
-    hu_new = hu_new * damp
-    hv_new = hv_new * damp
+    h_film = np.where(wet & (h_new < film), h_new, film)
+    rate = (film * film - h_film * h_film) / (2.0 * h_film * h_film) * np.sqrt(g / film)
+    hu_new = hu_new / (1.0 + dt * rate)
+    hv_new = hv_new / (1.0 + dt * rate)
     h_safe = np.where(wet, h_new, 1.0)
     u = hu_new / h_safe
     v = hv_new / h_safe

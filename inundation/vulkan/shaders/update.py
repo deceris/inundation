@@ -17,7 +17,10 @@ the flux divergence telescopes to zero over a closed domain:
 so 0.5*(C0 + C1) is precisely the volume the clamp added over the step.
 """
 
-UPDATE_GLSL = """\
+from .flux import FILM_DRAG_GLSL
+
+UPDATE_GLSL = (
+    """\
 #version 450
 
 layout(local_size_x = 256) in;
@@ -53,6 +56,9 @@ layout(push_constant) uniform PC {
     float track_clamp;
 } pc;
 
+"""
+    + FILM_DRAG_GLSL
+    + """\
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.num_cells) return;
@@ -84,11 +90,10 @@ void main() {
     }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
     // Keep the stored momentum consistent with the film velocity the flux sees.
-    float film = 4.0 * pc.dry_tol;
-    if (h_new < film) {
-        float damp = 2.0 * h_new * h_new / (h_new * h_new + film * film);
-        hu_new *= damp;
-        hv_new *= damp;
+    if (h_new >= pc.dry_tol) {
+        float drag = film_drag(h_new, dt);
+        hu_new *= drag;
+        hv_new *= drag;
     }
 
     if (h_new >= pc.dry_tol) {
@@ -128,8 +133,10 @@ void main() {
 }
 
 """
+)
 
-UPDATE_DTBUF_GLSL = """\
+UPDATE_DTBUF_GLSL = (
+    """\
 #version 450
 
 layout(local_size_x = 256) in;
@@ -165,6 +172,9 @@ layout(push_constant) uniform PC {
     float track_clamp;
 } pc;
 
+"""
+    + FILM_DRAG_GLSL
+    + """\
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.num_cells) return;
@@ -194,11 +204,10 @@ void main() {
     }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
     // Keep the stored momentum consistent with the film velocity the flux sees.
-    float film = 4.0 * pc.dry_tol;
-    if (h_new < film) {
-        float damp = 2.0 * h_new * h_new / (h_new * h_new + film * film);
-        hu_new *= damp;
-        hv_new *= damp;
+    if (h_new >= pc.dry_tol) {
+        float drag = film_drag(h_new, dt);
+        hu_new *= drag;
+        hv_new *= drag;
     }
 
     if (h_new >= pc.dry_tol) {
@@ -233,3 +242,4 @@ void main() {
 }
 
 """
+)

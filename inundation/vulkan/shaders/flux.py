@@ -7,6 +7,8 @@ of their unused dt slot, so the flux and CFL kernels of every backend run the
 same arithmetic.
 """
 
+from ...tuning import FILM_DEPTHS
+
 _BINDINGS = """\
 layout(set=0, binding=0)  buffer H      { float h[];      };
 layout(set=0, binding=1)  buffer HU     { float hu[];     };
@@ -30,13 +32,32 @@ layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 """
 
 # Riemann solver and face reconstruction shared by every flux and CFL kernel.
-HLLC_GLSL = """\
+_FILM_CONST_GLSL = f"const float FILM_DEPTHS = {FILM_DEPTHS};\n"
+
+# Momentum decay of a thin film, semi-implicit like the friction term. The update
+# applies it so the stored momentum follows the velocity the flux sees; it is a
+# rate, so it does not depend on the tick size. The rate is the ratio the
+# desingularised velocity falls short by, over the film's gravity time scale.
+FILM_DRAG_GLSL = (
+    _FILM_CONST_GLSL
+    + """\
+float film_drag(float h_, float dt_) {
+    float e_ = FILM_DEPTHS * pc.dry_tol;
+    if (h_ >= e_) return 1.0;
+    float rate = (e_ * e_ - h_ * h_) / (2.0 * h_ * h_) * sqrt(pc.g / e_);
+    return 1.0 / (1.0 + dt_ * rate);
+}
+
+"""
+)
+
+HLLC_GLSL = (
+    _FILM_CONST_GLSL
+    + """\
 // Velocity of a thin film. hq / h is singular as h falls: momentum flowing into
 // a cell barely above dry_tol reached 26 000 m/s and stalled the CFL bound. The
 // desingularised form (Kurganov & Petrova 2007) equals hq / h above FILM_DEPTHS
 // times dry_tol and damps towards zero below it.
-const float FILM_DEPTHS = 4.0;
-
 float safe_vel(float h_, float hq) {
     float e_ = FILM_DEPTHS * pc.dry_tol;
     return (h_ > pc.dry_tol) ? 2.0 * h_ * hq / (h_ * h_ + max(h_ * h_, e_ * e_)) : 0.0;
@@ -159,6 +180,7 @@ float wave_bound(float hL, float huL, float hvL, float dzL,
 }
 
 """
+)
 
 # The flux kernel body: identical for every host-driven backend.
 _FLUX_MAIN = """\

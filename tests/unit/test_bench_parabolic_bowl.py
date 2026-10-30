@@ -1,8 +1,10 @@
+# pyright: reportUnknownMemberType=false
 """The parabolic-bowl reference must solve the shallow-water equations."""
 
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -18,15 +20,17 @@ from inundation.bench.parabolic_bowl import (
 )
 from inundation.tuning import GRAVITY_G
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
 D = 1e-4
 
 
-def _points() -> tuple[np.ndarray, np.ndarray]:
+def _points() -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     # Well inside the wet region at every phase of the swing.
-    r = np.linspace(0.0, 0.2, 9)
-    th = np.linspace(0.0, 2.0 * np.pi, 13)
-    rr, tt = np.meshgrid(r, th)
-    return (rr * np.cos(tt)).ravel(), (rr * np.sin(tt)).ravel()
+    r: NDArray[np.float64] = np.linspace(0.0, 0.2, 9, dtype=np.float64)
+    th: NDArray[np.float64] = np.linspace(0.0, 2.0 * np.pi, 13, dtype=np.float64)
+    return np.outer(r, np.cos(th)).ravel(), np.outer(r, np.sin(th)).ravel()
 
 
 @pytest.mark.parametrize("t", [0.0, 0.37, 1.1, 2.9])
@@ -46,7 +50,7 @@ def test_momentum(t: float) -> None:
     u_t = (exact(x, y, t + D)[1] - exact(x, y, t - D)[1]) / (2 * D)
     v_t = (exact(x, y, t + D)[2] - exact(x, y, t - D)[2]) / (2 * D)
 
-    def eta(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    def eta(a: NDArray[np.float64], b: NDArray[np.float64]) -> NDArray[np.float64]:
         return exact(a, b, t)[0] + bed(a, b)
 
     np.testing.assert_allclose(

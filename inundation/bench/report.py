@@ -123,6 +123,19 @@ SUITES: tuple[SuiteSpec, ...] = (
         ),
         gif_args=("--gif",),
     ),
+    SuiteSpec(
+        name="parabolic_bowl",
+        module="inundation.bench.parabolic_bowl",
+        title="Thacker parabolic bowl (exact wetting and drying)",
+        description=(
+            "Purpose: repeated wetting and drying against an exact solution.\n"
+            "Setup: frictionless paraboloid, 4 m × 4 m at 200 × 200 cells, tilted planar "
+            "surface, so the shoreline moves across cells every period.\n"
+            "Forcing and runtime: none, three periods.\n"
+            "Validation: depth error, thin-film speed, clamp mass, volume, and determinism gates."
+        ),
+        gif_args=(),
+    ),
 )
 
 

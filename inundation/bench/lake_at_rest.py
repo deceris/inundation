@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from inundation.mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
-from inundation.tuning import CFL_DEFAULT, DRY_TOL_DEFAULT, GRAVITY_G
+from inundation.tuning import DRY_TOL_DEFAULT, GRAVITY_G
 from inundation.vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
 from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 from inundation.workflow import (
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 NX = NY = 128
 G = GRAVITY_G
 DRY_TOL = DRY_TOL_DEFAULT
-CFL = CFL_DEFAULT
 WORKGROUP_SIZE = 256
 DT_MAX = 0.05
 DT_INIT = 1e-2
@@ -142,7 +141,6 @@ def run_case(
         n0,
         g=G,
         dry_tol=DRY_TOL,
-        cfl=CFL,
         workgroup_size=WORKGROUP_SIZE,
     )
     print(

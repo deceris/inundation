@@ -42,6 +42,7 @@ from ..mesh.blocks import (
 )
 from ..tuning import (
     ACTIVE_BLOCK_CELLS,
+    CFL_DEFAULT,
     compute_workgroups,
     dt_to_ticks,
     output_window_stops,
@@ -134,6 +135,7 @@ def _f32_bits(words: NDArray[np.uint32]) -> NDArray[np.float32]:
 class SWESolverGpuResidentBatch(SWESolver):
     """Record once, submit many steps; dt and time stay on the GPU."""
 
+    default_cfl: float = CFL_DEFAULT
     steps_per_graph: int = STEPS_PER_GRAPH_DEFAULT
     # Skip blocks far from water. Off only to check that skipping is exact.
     active_set: bool = True
@@ -361,6 +363,8 @@ class SWESolverGpuResidentBatch(SWESolver):
             ]
         )
 
+        self._eft_probe_spv = spv["eft_probe"]
+        self._eft_checked = False
         self._source_list_spv = spv["source_resident"]
         self._algo_source_list: kp.Algorithm | None = None
         self._source_count = 0
@@ -401,6 +405,26 @@ class SWESolverGpuResidentBatch(SWESolver):
     def download_h_precise(self) -> NDArray[np.float64]:
         """Depth as float64: the committed float32 word plus its low word."""
         return self.download_h().astype(np.float64) + self.download_h_residual().astype(np.float64)
+
+    def _check_error_free_arithmetic(self) -> None:
+        """Refuse to run if the compiler optimised the depth compensation away."""
+        if self._eft_checked:
+            return
+        words = np.array([1.0, 1e-9, 0.0], dtype=np.float32)
+        tensor = self._mgr.tensor(words.copy())
+        algo = self._mgr.algorithm([tensor], self._eft_probe_spv, workgroup=(1, 1, 1))
+        seq = self._mgr.sequence()
+        seq.record(kp.OpTensorSyncDevice([tensor]))
+        seq.record(kp.OpAlgoDispatch(algo))
+        seq.record(kp.OpTensorSyncLocal([tensor]))
+        seq.eval()
+        if float(np.asarray(tensor.data())[2]) != float(words[1]):
+            raise RuntimeError(
+                "error-free arithmetic is broken on this device, so compensated depth would "
+                "leak mass: set MVK_CONFIG_FAST_MATH_ENABLED=0 before any Vulkan instance is "
+                "created, or set compensated = False"
+            )
+        self._eft_checked = True
 
     def download_block_flags(self) -> NDArray[np.uint32]:
         """``(n_blocks, 2)`` active-set flags: wet, active."""
@@ -574,6 +598,8 @@ class SWESolverGpuResidentBatch(SWESolver):
 
         if not resume:
             self._reset_to_initial()
+        if self.compensated:
+            self._check_error_free_arithmetic()
         if self.track_clamp != self._update_track_clamp:
             self._build_update_algos()
 

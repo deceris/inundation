@@ -16,13 +16,16 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
+import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from inundation.tuning import GRAVITY_G
+from inundation.tuning import CFL_DEFAULT, GRAVITY_G
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -37,6 +40,10 @@ MANNING_FLOOR = 1e-4
 DRY_TOL = 1e-4
 WET_THRESHOLD_M = 1e-3
 FILM_DEPTH_M = 1e-3
+GATE_NX = 200
+GATE_DEPTH_L1 = 0.18
+GATE_FILM_SPEED_MS = 1.0
+GATE_VOLUME_DRIFT = 1e-7
 
 
 def omega() -> float:
@@ -119,7 +126,7 @@ def run_case(
     solver.compensated = compensated
     solver.track_clamp = True
     t_end = periods * period_s()
-    snaps, times = solver.run(
+    result = solver.run(
         t_end=t_end,
         output_interval_s=t_end / (8 * periods),
         dt_max=0.05,
@@ -127,6 +134,7 @@ def run_case(
         cfl_interval=1,
         progress=False,
     )
+    snaps, times = result[0], result[1]
     errors: list[float] = []
     wrong: list[float] = []
     for snap, t in zip(snaps[1:], times[1:], strict=True):
@@ -164,23 +172,83 @@ def run_case(
     )
 
 
-def main() -> None:
+def evaluate(metrics: BowlMetrics) -> list[str]:
+    """Reasons the case fails its gates; empty when it passes."""
+    reasons: list[str] = []
+    if metrics.nx == GATE_NX and metrics.depth_l1_rel_mean >= GATE_DEPTH_L1:
+        reasons.append(f"depth_l1_rel_mean {metrics.depth_l1_rel_mean:.4f} >= {GATE_DEPTH_L1}")
+    if metrics.film_speed_max_ms >= GATE_FILM_SPEED_MS:
+        reasons.append(f"film_speed_max_ms {metrics.film_speed_max_ms:.2f} >= {GATE_FILM_SPEED_MS}")
+    if metrics.clamp_rel != 0.0:
+        reasons.append(f"clamp_rel {metrics.clamp_rel:.2e} != 0")
+    if metrics.volume_drift_rel >= GATE_VOLUME_DRIFT:
+        reasons.append(f"volume_drift_rel {metrics.volume_drift_rel:.2e} >= {GATE_VOLUME_DRIFT}")
+    return reasons
+
+
+def main() -> int:
     from inundation.workflow import (
         _compile_solver_shaders,  # pyright: ignore[reportPrivateUsage]
     )
 
     parser = argparse.ArgumentParser(description="Thacker planar surface in a parabolic bowl")
-    parser.add_argument("--nx", type=int, default=200)
+    parser.add_argument("--nx", type=int, default=GATE_NX)
     parser.add_argument("--periods", type=int, default=3)
-    parser.add_argument("--cfl", type=float, default=0.8)
-    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--cfl", type=float, default=None, help="CFL number")
+    parser.add_argument("--output-dir", type=Path, default=Path(".tmp/parabolic-bowl"))
+    parser.add_argument("--repeats", type=int, default=2, help=">=2 enables determinism checks")
+    parser.add_argument("--warmup", type=int, default=0)
     args = parser.parse_args()
-    metrics = asdict(run_case(_compile_solver_shaders(), args.nx, args.cfl, args.periods))
-    text = json.dumps(metrics, indent=2)
-    print(text)
-    if args.output is not None:
-        args.output.write_text(text, encoding="utf-8")
+
+    spv = _compile_solver_shaders()
+    cfl = CFL_DEFAULT if args.cfl is None else float(args.cfl)
+    for _ in range(args.warmup):
+        run_case(spv, args.nx, cfl, args.periods)
+    walls: list[float] = []
+    runs: list[BowlMetrics] = []
+    for _ in range(max(1, args.repeats)):
+        t0 = time.perf_counter()
+        runs.append(run_case(spv, args.nx, cfl, args.periods))
+        walls.append(time.perf_counter() - t0)
+
+    metrics = runs[0]
+    reasons = evaluate(metrics)
+    deterministic = all(r == metrics for r in runs)
+    if not deterministic:
+        reasons.append("repeat runs differ")
+    summary = {
+        "gates": {
+            "depth_l1_rel_mean_max": GATE_DEPTH_L1,
+            "film_speed_max_ms_max": GATE_FILM_SPEED_MS,
+            "volume_drift_rel_max": GATE_VOLUME_DRIFT,
+            "clamp_rel_max": 0.0,
+        },
+        "correctness": [
+            {
+                "case": "thacker",
+                "backend": "gpu_resident_batch",
+                **asdict(metrics),
+                "deterministic": deterministic,
+                "fail_reasons": reasons,
+                "passed": not reasons,
+            }
+        ],
+        "performance": [
+            {
+                "case": "thacker",
+                "backend": "gpu_resident_batch",
+                "repeats": len(walls),
+                "median_wall_s": statistics.median(walls),
+                "steps_total": metrics.steps,
+            }
+        ],
+    }
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps(summary["correctness"], indent=2))
+    print(f"RESULT: {'PASS' if not reasons else 'FAIL'}")
+    return 1 if reasons else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

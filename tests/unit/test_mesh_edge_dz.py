@@ -8,16 +8,21 @@ in float64 so they carry the exact difference of the two float32 beds.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from inundation.mesh.geometry import MeshGeometry, edge_bed_steps
 
 from ._valley import valley_grid
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
 DATUM = 300.0
 
 
-def _expected(geom: MeshGeometry) -> tuple[np.ndarray, np.ndarray]:
+def _expected(geom: MeshGeometry) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     zb = geom.zb.astype(np.float64)
     wall = geom.edge_cellR < 0
     zbL = zb[geom.edge_cellL]

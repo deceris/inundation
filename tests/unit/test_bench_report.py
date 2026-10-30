@@ -126,3 +126,7 @@ def test_render_html_inlines_graphs_before_animations(tmp_path: Path) -> None:
     assert rendered.index("Graphs") < rendered.index("Animations")
     assert "data:image/png;base64" in rendered
     assert "bad&lt;&amp;graph.png" in rendered
+
+
+def test_the_wetting_and_drying_case_is_a_gate() -> None:
+    assert "parabolic_bowl" in {spec.name for spec in SUITES}

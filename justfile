@@ -89,6 +89,10 @@ benchmark-obstruction *args:
 benchmark-propagation *args:
     {{docker_prefix}} uv run python -m inundation.bench.flood_propagation {{args}}
 
+# Thacker parabolic bowl: repeated wetting and drying with an exact answer.
+benchmark-bowl *args:
+    {{docker_prefix}} uv run python -m inundation.bench.parabolic_bowl {{args}}
+
 # Run the benchmark harnesses and fold logs, metrics, and animations into
 # one self-contained HTML report at .tmp/bench-report/report.html.
 benchmark-report *args:

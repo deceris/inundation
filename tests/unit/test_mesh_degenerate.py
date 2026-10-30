@@ -7,14 +7,21 @@ flux sum by its area and turn the state to NaN.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
 from inundation.mesh.geometry import build_geometry
 from inundation.tuning import MIN_CELL_AREA
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
-def _two_triangles_and(extra_vertex: tuple[float, float]) -> tuple[np.ndarray, np.ndarray]:
+
+def _two_triangles_and(
+    extra_vertex: tuple[float, float],
+) -> tuple[NDArray[np.float32], NDArray[np.int32]]:
     verts = np.array(
         [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [2.0, 0.0], extra_vertex],
         dtype=np.float32,

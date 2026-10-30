@@ -6,6 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from inundation.tuning import CFL_DEFAULT, CFL_HOST_DRIVEN
 from inundation.workflow import WorkflowConfig
 
 from ._fixtures import requires_vulkan
@@ -38,3 +39,21 @@ def test_unbarriered_fixed_dt_batch_refuses_to_run() -> None:
     )
     with pytest.raises(RuntimeError, match="barrier"):
         run(solver, 1.0)
+
+
+def test_host_driven_backends_keep_a_lower_cfl() -> None:
+    # They reuse one dt for cfl_interval steps; the resident backend recomputes
+    # the bound every step, so only it may run at CFL_DEFAULT.
+    from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
+    from inundation.vulkan.solver import SWESolver
+
+    assert SWESolver.default_cfl == CFL_HOST_DRIVEN
+    assert SWESolverGpuResidentBatch.default_cfl == CFL_DEFAULT
+    assert CFL_HOST_DRIVEN < CFL_DEFAULT
+
+
+def test_workflow_leaves_the_cfl_to_the_backend() -> None:
+    config = WorkflowConfig(
+        mesh_source="mesh.gpkg", manning_n=0.03, output_interval_s=60.0, dt_max=1.0, cfl_interval=1
+    )
+    assert config.cfl is None

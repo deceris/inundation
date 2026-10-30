@@ -31,6 +31,12 @@ DRY_TOL_DEFAULT = 1e-4
 # metrics (docs/implementation/24-solver-accuracy-fixes/results.md). 0.8 keeps
 # a margin below the limit on terrain the sweep did not cover.
 CFL_DEFAULT = 0.8
+# Backends that reuse one dt for cfl_interval steps: the bound goes stale between
+# recomputes, so they keep the margin they were validated with.
+CFL_HOST_DRIVEN = 0.45
+# Below this many dry_tol the velocity is desingularised and film momentum decays
+# at a rate, so a cell barely above dry_tol cannot reach an absurd speed.
+FILM_DEPTHS = 4.0
 REGIME_DRY = 2
 
 # ── Vulkan solver ─────────────────────────────────────────────────────────────

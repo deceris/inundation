@@ -1,3 +1,4 @@
+# pyright: reportUnknownMemberType=false
 """HLLC wave-speed bounds: dry-bed estimates must not switch on abruptly.
 
 A jump in the speeds at ``dry_tol`` lets float32 rounding flip a whole flux, and

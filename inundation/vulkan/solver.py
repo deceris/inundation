@@ -22,14 +22,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-try:
-    import kp
-except ImportError as exc:
-    raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
-
 from ..tuning import (
-    CFL_DEFAULT,
     CFL_EPSILON_MIN,
+    CFL_HOST_DRIVEN,
     CFL_SANITY_MAX,
     DRY_TOL_DEFAULT,
     GRAVITY_G,
@@ -38,26 +33,26 @@ from ..tuning import (
     uint_as_float_bits,
 )
 
+# MoltenVK compiles shaders with Metal fast math unless told otherwise, and that
+# reassociates the error-free transforms of the compensated depth away, with or
+# without `precise`. It reads this once, when the first Vulkan instance is made,
+# so it is set at import. A value already in the environment wins, and a Manager
+# made before this import keeps the default: gpu_resident_batch checks the
+# arithmetic on the device before a run. No effect on other drivers; costs about
+# 7 % per step on MoltenVK.
+os.environ.setdefault("MVK_CONFIG_FAST_MATH_ENABLED", "0")
+
+try:
+    import kp
+except ImportError as exc:
+    raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from numpy.typing import NDArray
 
     from ..mesh.geometry import MeshGeometry
-
-# MoltenVK compiles shaders with Metal fast math unless told otherwise, and its
-# on-demand mode (1.4.2) does not honour the GLSL `precise` qualifier: the
-# error-free transforms of the compensated depth update are reassociated away
-# and the update leaks mass at ~1e-7 relative instead of ~1e-9. Read when the
-# Vulkan instance is created, so it is set before the first kp.Manager(). A
-# value already in the environment wins. No effect on other drivers; costs
-# about 7 % per step on MoltenVK (interleaved runs on a 32 k wet valley).
-_MOLTENVK_FAST_MATH_VAR = "MVK_CONFIG_FAST_MATH_ENABLED"
-
-
-def _disable_moltenvk_fast_math() -> None:
-    os.environ.setdefault(_MOLTENVK_FAST_MATH_VAR, "0")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Push-constant helpers
@@ -126,11 +121,14 @@ class SWESolver:
     dry_tol : float
         Depth below which a cell is considered dry.  Default 1e-4.
     cfl : float
-        CFL number.  Default ``CFL_DEFAULT`` (0.8).
+        CFL number.  Default ``default_cfl`` of the backend.
     workgroup_size : int
         GPU workgroup size.  Default 256.
 
     """
+
+    # CFL number when none is given; see CFL_HOST_DRIVEN.
+    default_cfl: float = CFL_HOST_DRIVEN
 
     def __init__(
         self,
@@ -143,7 +141,7 @@ class SWESolver:
         *,
         g: float = GRAVITY_G,
         dry_tol: float = DRY_TOL_DEFAULT,
-        cfl: float = CFL_DEFAULT,
+        cfl: float | None = None,
         workgroup_size: int = 256,
     ) -> None:
         self.geom = geom
@@ -151,7 +149,7 @@ class SWESolver:
         self.E = geom.E
         self._g = float(g)
         self._dry_tol = float(dry_tol)
-        self._cfl = float(cfl)
+        self._cfl = float(self.default_cfl if cfl is None else cfl)
         self._work_group_size = workgroup_size
         # Opt-in: costs one extra buffer write per cell per RK stage.
         self.track_clamp = False
@@ -165,7 +163,6 @@ class SWESolver:
         self._SENTINEL_UINT = struct.unpack("I", struct.pack("f", 1e30))[0]
         self._SENTINEL_F = struct.unpack("f", struct.pack("I", self._SENTINEL_UINT))[0]
 
-        _disable_moltenvk_fast_math()
         self._mgr = kp.Manager()
         self._build_tensors(geom, h0, hu0, hv0, n0)
         self._build_algorithms(spv)

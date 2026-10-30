@@ -42,7 +42,7 @@ from inundation.bench.common import (
     volume_drift_rel,
     write_mesh_parquet,
 )
-from inundation.tuning import CFL_DEFAULT, GRAVITY_G
+from inundation.tuning import GRAVITY_G
 from inundation.workflow import (
     SimulationPhase,
     SWEWorkflow,
@@ -223,7 +223,7 @@ def _make_workflow(
     output_interval_s: float,
     dt_max: float,
     cfl_interval: int,
-    cfl: float,
+    cfl: float | None,
     progress: bool,
 ) -> SWEWorkflow:
     config = WorkflowConfig(
@@ -252,7 +252,7 @@ def _run_once(
     output_interval_s: float,
     dt_max: float,
     cfl_interval: int,
-    cfl: float,
+    cfl: float | None,
     progress: bool,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     workflow = _make_workflow(
@@ -562,7 +562,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--t-end", type=float, default=T_END_S)
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
-    parser.add_argument("--cfl", type=float, default=CFL_DEFAULT, help="CFL number")
+    parser.add_argument("--cfl", type=float, default=None, help="CFL number")
     parser.add_argument(
         "--output-interval-s",
         type=float,

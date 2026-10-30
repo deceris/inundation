@@ -24,7 +24,6 @@ from .mesh.cache import (
 from .mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
 from .mesh.loader import load_mesh_file
 from .tuning import (
-    CFL_DEFAULT,
     DRY_TOL_DEFAULT,
     GRAVITY_G,
     MIN_NDIM_NPY_INPUT,
@@ -93,7 +92,8 @@ class WorkflowConfig:
     cfl_interval: int
     gravity: float = GRAVITY_G
     dry_tol: float = DRY_TOL_DEFAULT
-    cfl: float = CFL_DEFAULT
+    # None lets the backend choose: CFL_DEFAULT, or CFL_HOST_DRIVEN where dt is reused.
+    cfl: float | None = None
     workgroup_size: int = 256
     dt_init: float = 1e-2
     use_hilbert_reorder: bool = True

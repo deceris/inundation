@@ -68,7 +68,7 @@ from inundation.bench.common import (
     water_surface_elevation,
     write_mesh_parquet,
 )
-from inundation.tuning import CFL_DEFAULT, GRAVITY_G
+from inundation.tuning import GRAVITY_G
 from inundation.workflow import (
     PointSource,
     SimulationPhase,
@@ -196,7 +196,7 @@ class PropagationSpec:
     dt_max: float
     cfl_interval: int
     dataset_dir: Path
-    cfl: float = CFL_DEFAULT
+    cfl: float | None = None
 
     @property
     def dx_m(self) -> float:
@@ -810,7 +810,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
-    parser.add_argument("--cfl", type=float, default=CFL_DEFAULT, help="CFL number")
+    parser.add_argument("--cfl", type=float, default=None, help="CFL number")
     parser.add_argument("--repeats", type=int, default=2, help=">=2 enables determinism check")
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--solver-progress", action="store_true")

@@ -35,7 +35,7 @@ block flag stores) do not depend on order.
 
 import sys
 
-from .flux import HLLC_GLSL
+from .flux import FILM_DRAG_GLSL, HLLC_GLSL
 
 # Bindings 0-18 shared by every resident kernel. dt is declared as uint words.
 _BINDINGS = """\
@@ -399,6 +399,7 @@ layout(push_constant) uniform PC {
 } pc;
 
 """
+        + FILM_DRAG_GLSL
         + (_EFT_GLSL if compensated else "")
         + """
 void main() {
@@ -443,11 +444,10 @@ void main() {
     }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
     // Keep the stored momentum consistent with the film velocity the flux sees.
-    float film = 4.0 * pc.dry_tol;
-    if (h_new < film) {
-        float damp = 2.0 * h_new * h_new / (h_new * h_new + film * film);
-        hu_new *= damp;
-        hv_new *= damp;
+    if (h_new >= pc.dry_tol) {
+        float drag = film_drag(h_new, dt);
+        hu_new *= drag;
+        hv_new *= drag;
     }
 
     if (h_new >= pc.dry_tol) {
@@ -812,11 +812,34 @@ void main() {
 """
 )
 
+# Start-of-run check that the compiler kept the error-free arithmetic: the error
+# term of 1 + 1e-9 must survive. Fast math folds it to zero.
+EFT_PROBE_GLSL = (
+    """\
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(set=0, binding=0) buffer V { float v[]; };
+
+"""
+    + _EFT_GLSL
+    + """
+void main() {
+    float s, e;
+    two_sum(v[0], v[1], s, e);
+    v[2] = e;
+}
+
+"""
+)
+
 __all__ = [
     "BLOCK_DILATE_GLSL",
     "BLOCK_MARK_GLSL",
     "CFL_EDGE_GATHER_GLSL",
     "CFL_GATHER_GLSL",
+    "EFT_PROBE_GLSL",
     "FLUX_RESIDENT_GATHER_GLSL",
     "FLUX_RESIDENT_GLSL",
     "SOURCE_RESIDENT_GLSL",
