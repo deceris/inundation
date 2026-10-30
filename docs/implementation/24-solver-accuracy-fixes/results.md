@@ -162,12 +162,38 @@ answer. It is frictionless, so nothing hides thin-film errors. Three periods,
 | Dry-bed speeds, no film damping | 5 of 12 | 0.0915 | 0.2019 | 2.75 m/s |
 | No dry-bed speeds | 0 of 12 | 0.0916 | 0.2020 | 2.09 m/s |
 | Dry-bed speeds with film damping | 0 of 12 | 0.0855 | 0.1785 | 0.72 m/s |
+| Time-scaled film damping (final) | 0 of 16 | 0.0863 | 0.1818 | 0.72 m/s |
 
 The original code, at nx 200 and 400, gives the same errors as the second row.
 The dry-bed speeds alone therefore bought no accuracy and added a crash: momentum
 flowing into a cell barely above `dry_tol` reached 26 000 m/s and took the CFL
 bound below one tick. None of the five gate suites reach this case. With the
-Kurganov-Petrova film damping the errors are about 7 % and 12 % lower.
+Kurganov-Petrova film damping the errors are about 6 % and 10 % lower in the
+final form, a rate like friction rather than a fixed factor per stage. Results
+now agree from CFL 0.2 to 1.0: depth L1 0.0864 to 0.0862 at nx 400.
+
+## Review fixes
+
+- `FILM_DEPTHS` lives in `tuning.py`, the one source for the kernels and the
+  float64 reference.
+- `CFL_DEFAULT` 0.8 applies to `gpu_resident_batch` only. Host-driven backends
+  reuse one dt for several steps and keep `CFL_HOST_DRIVEN` 0.45;
+  `WorkflowConfig.cfl` defaults to `None`.
+- The parabolic bowl is a sixth gate suite with a `just benchmark-bowl` recipe.
+- The fast-math setting moved to import time. A resident run checks the
+  error-free arithmetic on the device first and raises if it is broken.
+- Strict pyright passes natively against the venv and in the container, after
+  fixing 75 errors added earlier in this effort. In the container, ruff, pyright
+  and markdown lint pass, and pytest gives 295 passed and 118 skipped, the GPU
+  tests. The image has no Node.js and pyright's download fails on arm64, so Node
+  was installed in the running container for that check; `just typecheck` still
+  fails on a fresh arm64 image.
+- All 413 tests pass natively with the GPU. Five more deliberate breaks of these
+  changes are all caught.
+
+Final gates, commit `0a0ec77`: all six suites pass. Lake at rest at 120 s reads
+8.4e-6 to 1.2e-5 m/s on `gpu_resident_batch` and 1.3e-5 to 2.2e-5 m/s on
+`fixed_dt_batch_barrier`.
 
 ## Atomic path repeatability
 
@@ -224,16 +250,16 @@ this way.
 ## Nysa 24 h
 
 2.35 M cells, six sources, 30 m³/s peak, active set and deterministic gather on,
-commit `0fc3e28`, clamp tracking on. Single runs, M1 Max with MoltenVK:
+commit `0a0ec77`, clamp tracking on. Single runs, M1 Max with MoltenVK:
 
 | | Effort 23 | CFL 0.8 | CFL 0.4 |
 | --- | ---: | ---: | ---: |
 | Water in domain | 3 692 242 m³ | 3 739 500 m³ | 3 739 500 m³ |
 | Deficit against 3 739 500 m³ injected | 1.26 % | 0.0000 % | 0.0000 % |
-| Clamp mass | not recorded | 3e-20 m³ | 0 |
+| Clamp mass | not recorded | 0 | 0 |
 | Steps | 2 744 246 | 1 168 669 | 2 337 299 |
-| Wall time | 1 527 s | 785 s | 1 934 s |
-| Peak host memory | 7.8 GB | 8.2 GB | 7.7 GB |
+| Wall time | 1 527 s | 830 s | 2 334 s |
+| Peak host memory | 7.8 GB | 7.6 GB | 7.4 GB |
 | Wet area, h_max above 5 cm | 5.207 km² | 5.246 km² | 5.246 km² |
 
 The deficit was float32 rounding, as suspected: it is gone with the compensated
@@ -274,6 +300,8 @@ The Ritter wet-front error rose from 12.9 % to 13.9 % at the gate resolution,
 because the damping slows the thin tip, and it does not fall under refinement
 (11.2 %, 12.7 %, 13.9 %, 13.6 % coarse to fine). The depth L1 is unchanged.
 
+These orders predate the time-scaled film damping and the `precise` change.
+
 ## Unit tests
 
-408 pass (299 before this effort).
+413 pass (299 before this effort).

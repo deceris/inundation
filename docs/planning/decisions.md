@@ -218,3 +218,12 @@ compensated depth it reads 0.0000 % with no clamp contribution. Depths at CFL 0.
 stay within 2.1 cm of a CFL 0.4 run at every checked time, at about half the wall
 time of effort 23, so 0.8 stays the default. Evidence:
 [`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
+
+## CFL default per backend, film damping as a rate
+
+`CFL_DEFAULT` 0.8 applies only to `gpu_resident_batch`, which recomputes its
+bound every step; backends that reuse one dt keep `CFL_HOST_DRIVEN` 0.45. Film
+momentum decays at a rate, semi-implicit like friction, because a fixed factor
+per stage made results depend on the tick size. This gives back a little of the
+bowl gain and removes the dependence. Evidence:
+[`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
