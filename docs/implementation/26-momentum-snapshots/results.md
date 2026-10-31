@@ -43,6 +43,11 @@ passed because the flag did nothing, and `baseline` already delivered. Reading
 `hu1`, dropping the initial snapshot and dropping the tail snapshot were each
 caught.
 
+## Gates
+
+All six suites pass on `4c9fa8b`. Every correctness metric in their summaries is
+identical to the previous run on `0a0ec77`; only wall-time fields differ.
+
 ## Known limitation
 
 The final tail snapshot is kept only if `np.allclose` sees a depth change. With a
