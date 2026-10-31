@@ -433,7 +433,9 @@ def _gauge_cells(workflow: SWEWorkflow, gauges: NDArray[np.float64]) -> NDArray[
     """Solver cell nearest each published output point."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    return nearest_cell_indices(workflow.geom.centroid[:, 0], workflow.geom.centroid[:, 1], gauges)
+    return nearest_cell_indices(
+        workflow.geom.world_centroid[:, 0], workflow.geom.world_centroid[:, 1], gauges
+    )
 
 
 def _depth_grid(
@@ -442,8 +444,8 @@ def _depth_grid(
     """Scatter solver-order depths back onto the (ny, nx) mesh grid."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    cx = workflow.geom.centroid[:, 0].astype(np.float64)
-    cy = workflow.geom.centroid[:, 1].astype(np.float64)
+    cx = workflow.geom.world_centroid[:, 0]
+    cy = workflow.geom.world_centroid[:, 1]
     col = np.clip((cx / spec.dx_m).astype(np.int64), 0, spec.nx - 1)
     row = np.clip((cy / spec.dy_m).astype(np.int64), 0, spec.ny - 1)
     grid = np.zeros((spec.ny, spec.nx), dtype=np.float64)

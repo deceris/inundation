@@ -17,6 +17,7 @@ Typical usage
 import sys
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -36,6 +37,11 @@ from ..tuning import (
 @dataclass
 class MeshGeometry:
     """All precomputed geometry arrays needed by the GPU solver.
+
+    Every coordinate here is relative to ``origin``. Coordinates in the mesh
+    file are the mesh's world coordinates: add ``origin`` to get back to them.
+
+    origin : (2,) float64 - lower-left corner of the mesh, in world coordinates
 
     Cell arrays (N entries each)
     ----------------------------
@@ -75,11 +81,6 @@ class MeshGeometry:
         ``(edge_idx << 1) | is_right``, precomputed so gather operations can
         determine orientation without another edge-cell lookup
 
-    Dense arrays (padded to max_degree, for backward compat)
-    ---------------------------------------------------------
-    cell_edges     : (N, max_degree) int32
-    cell_neighbors : (N, max_degree) int32
-
     Mesh counts
     -----------
     N : number of cells
@@ -88,6 +89,7 @@ class MeshGeometry:
     max_degree : maximum number of edges on any cell
     """
 
+    origin: NDArray[np.float64]
     centroid: NDArray[np.float32]
     area: NDArray[np.float32]
     zb: NDArray[np.float32]
@@ -103,8 +105,6 @@ class MeshGeometry:
     edge_cellR: NDArray[np.int32]
     edge_sideL: NDArray[np.int32]
     edge_sideR: NDArray[np.int32]
-    cell_edges: NDArray[np.int32]
-    cell_neighbors: NDArray[np.int32]
     cell_edge_ptr: NDArray[np.int32]
     cell_edge_idx: NDArray[np.int32]
     cell_nbr_idx: NDArray[np.int32]
@@ -116,6 +116,11 @@ class MeshGeometry:
     max_degree: int = 3
     manning_n: NDArray[np.float32] | None = None
 
+    @property
+    def world_centroid(self) -> NDArray[np.float64]:
+        """Cell centroids in world coordinates."""
+        return self.centroid.astype(np.float64) + self.origin
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Polygon geometry helpers
@@ -123,11 +128,11 @@ class MeshGeometry:
 
 
 def _mixed_degree_cells(
-    verts: NDArray[np.float32],
+    verts: NDArray[np.float64],
     faces: NDArray[np.int32],
     face_offsets: NDArray[np.int32],
     degrees: NDArray[np.int32],
-) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+) -> tuple[NDArray[np.float32], NDArray[np.float64]]:
     """Area and centroid per cell, orienting clockwise cells in ``faces`` in place.
 
     Cells are taken one degree at a time because ``np.sum`` over a row is not a
@@ -136,12 +141,12 @@ def _mixed_degree_cells(
     order and its centroid uses the reversed one.
     """
     area = np.empty(degrees.size, dtype=np.float32)
-    centroid = np.empty((degrees.size, 2), dtype=np.float32)
+    centroid = np.empty((degrees.size, 2), dtype=np.float64)
     for degree in np.unique(degrees).tolist():
         cells = np.flatnonzero(degrees == degree)
         slots = face_offsets[cells, np.newaxis].astype(np.int64) + np.arange(degree)
         cell_faces = faces[slots]
-        xy = verts[cell_faces].astype(np.float64)
+        xy = verts[cell_faces]
         x, y = xy[:, :, 0], xy[:, :, 1]
         cross = x * np.roll(y, -1, axis=1) - np.roll(x, -1, axis=1) * y
         signed_area = 0.5 * np.sum(cross, axis=1)
@@ -150,7 +155,7 @@ def _mixed_degree_cells(
         if clockwise.any():
             cell_faces[clockwise] = cell_faces[clockwise, ::-1]
             faces[slots] = cell_faces
-            xy = verts[cell_faces].astype(np.float64)
+            xy = verts[cell_faces]
             x, y = xy[:, :, 0], xy[:, :, 1]
             cross = x * np.roll(y, -1, axis=1) - np.roll(x, -1, axis=1) * y
             signed_area = np.abs(signed_area)
@@ -200,7 +205,7 @@ def _match_half_edges(
 def _edge_lengths_and_normals(
     pa: NDArray[np.float64],
     pb: NDArray[np.float64],
-    centroid: NDArray[np.float32],
+    centroid: NDArray[np.float64],
     cell_l: NDArray[np.int32],
     cell_r: NDArray[np.int32],
 ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
@@ -216,9 +221,8 @@ def _edge_lengths_and_normals(
     ny[point] = 0.0
 
     interior = np.flatnonzero(cell_r != -1)
-    c = centroid.astype(np.float64)
-    c_l = c[cell_l[interior]]
-    between = c[cell_r[interior]] - c_l
+    c_l = centroid[cell_l[interior]]
+    between = centroid[cell_r[interior]] - c_l
     inx, iny = nx[interior], ny[interior]
     dot = between[:, 0] * inx + between[:, 1] * iny
     flip = dot < 0
@@ -232,18 +236,6 @@ def _edge_lengths_and_normals(
     nx[flipped] = -nx[flipped]
     ny[flipped] = -ny[flipped]
     return length.astype(np.float32), nx.astype(np.float32), ny.astype(np.float32)
-
-
-def _dense_from_csr(
-    values: NDArray[np.int32], ptr: NDArray[np.int32], max_degree: int
-) -> NDArray[np.int32]:
-    """``(N, max_degree)`` array of a CSR column, padded with -1."""
-    n = ptr.size - 1
-    rows = np.repeat(np.arange(n), np.diff(ptr))
-    columns = np.arange(values.size) - ptr[rows].astype(np.int64)
-    dense = np.full((n, max_degree), -1, dtype=np.int32)
-    dense[rows, columns] = values
-    return dense
 
 
 def edge_bed_steps(
@@ -268,7 +260,7 @@ def edge_bed_steps(
 
 
 def build_geometry(
-    verts: NDArray[np.float32],
+    verts: NDArray[np.floating[Any]],
     faces: NDArray[np.int32],
     face_offsets: NDArray[np.int32] | None = None,
     *,
@@ -280,8 +272,9 @@ def build_geometry(
 
     Parameters
     ----------
-    verts : (V, 2) float32
-        Vertex (x, y) coordinates.
+    verts : (V, 2) float
+        Vertex (x, y) world coordinates. Their lower-left corner becomes the
+        mesh origin, and all geometry is computed relative to it in float64.
     faces : (N, 3) int32 **or** flat (sum_of_degrees,) int32
         If 2-D with shape (N, d): legacy triangle/polygon input (uniform degree).
         If 1-D: flat vertex indices for all faces (requires face_offsets).
@@ -300,7 +293,10 @@ def build_geometry(
     MeshGeometry
 
     """
-    verts = np.asarray(verts, dtype=np.float32)
+    world_verts = np.asarray(verts, dtype=np.float64)
+    origin = world_verts.min(axis=0)
+    verts = world_verts - origin
+    del world_verts
     faces = np.array(faces, dtype=np.int32, copy=True)  # always copy to avoid mutating caller
 
     def _log(msg: str) -> None:
@@ -339,8 +335,8 @@ def build_geometry(
         poly_verts = verts[face_matrix]
 
         # Vectorised shoelace area (works for any polygon degree)
-        x = poly_verts[:, :, 0].astype(np.float64)
-        y = poly_verts[:, :, 1].astype(np.float64)
+        x = poly_verts[:, :, 0]
+        y = poly_verts[:, :, 1]
         x_next = np.roll(x, -1, axis=1)
         y_next = np.roll(y, -1, axis=1)
         signed_area = 0.5 * np.sum(x * y_next - x_next * y, axis=1)
@@ -353,8 +349,8 @@ def build_geometry(
             faces[:] = face_matrix.ravel()
             # Recompute with corrected orientation
             poly_verts = verts[face_matrix]
-            x = poly_verts[:, :, 0].astype(np.float64)
-            y = poly_verts[:, :, 1].astype(np.float64)
+            x = poly_verts[:, :, 0]
+            y = poly_verts[:, :, 1]
             x_next = np.roll(x, -1, axis=1)
             y_next = np.roll(y, -1, axis=1)
             signed_area = 0.5 * np.sum(x * y_next - x_next * y, axis=1)
@@ -372,7 +368,7 @@ def build_geometry(
             cx[degen] = poly_verts[degen, :, 0].mean(axis=1)
             cy[degen] = poly_verts[degen, :, 1].mean(axis=1)
 
-        centroid = np.column_stack([cx, cy]).astype(np.float32)
+        centroid = np.column_stack([cx, cy])
     else:
         area, centroid = _mixed_degree_cells(verts, faces, face_offsets, degrees)
     # A sliver below the CFL kernels' area floor gets no dt bound, so the first
@@ -428,8 +424,8 @@ def build_geometry(
     edge_sideR = np.full(E, -1, dtype=np.int32)
     edge_sideR[interior] = slot_side[second[interior]]
     edge_len, edge_nx, edge_ny = _edge_lengths_and_normals(
-        verts[faces[first]].astype(np.float64),
-        verts[faces[next_slot[first]]].astype(np.float64),
+        verts[faces[first]],
+        verts[faces[next_slot[first]]],
         centroid,
         edge_cellL,
         edge_cellR,
@@ -471,15 +467,14 @@ def build_geometry(
 
     cell_edge_idx_signed = (cell_edge_idx.astype(np.int32) << 1) | cell_edge_side
 
-    # ── Dense arrays (padded to max_degree, backward compat) ──────────────────
-    _log(f"CSR adjacency built in {time.perf_counter() - _t_stage:.1f}s (max_degree={max_degree})")
-    _t_stage = time.perf_counter()
-    cell_edges = _dense_from_csr(cell_edge_idx, cell_edge_ptr, max_degree)
-    cell_neighbors = _dense_from_csr(cell_nbr_idx, cell_edge_ptr, max_degree)
-    _log(f"dense arrays built in {time.perf_counter() - _t_stage:.1f}s — build_geometry done")
+    _log(
+        f"CSR adjacency built in {time.perf_counter() - _t_stage:.1f}s "
+        f"(max_degree={max_degree}) — build_geometry done"
+    )
 
     return MeshGeometry(
-        centroid=centroid,
+        origin=origin,
+        centroid=centroid.astype(np.float32),
         area=area,
         zb=zb,
         manning_n=manning_n,
@@ -495,8 +490,6 @@ def build_geometry(
         edge_cellR=edge_cellR,
         edge_sideL=edge_sideL,
         edge_sideR=edge_sideR,
-        cell_edges=cell_edges,
-        cell_neighbors=cell_neighbors,
         cell_edge_ptr=cell_edge_ptr,
         cell_edge_idx=cell_edge_idx,
         cell_nbr_idx=cell_nbr_idx,
@@ -637,18 +630,14 @@ def hilbert_reorder(
     cell_nbr_idx_new = np.where(old_nbrs == -1, -1, inv_perm[old_nbrs])
     del edge_slots, old_nbrs
 
-    # Dense arrays (padded)
-    max_degree = geom.max_degree
-    cell_edges_new = _dense_from_csr(cell_edge_idx_new, cell_edge_ptr_new, max_degree)
-    cell_neighbors_new = _dense_from_csr(cell_nbr_idx_new, cell_edge_ptr_new, max_degree)
-
-    # Verify normal orientation (>= 0 tolerates degenerate zero-area cells)
+    # Verify normal orientation. The normals were oriented with float64
+    # centroids, so a sub-spacing step between the float32 ones proves nothing.
     imask = edge_cellR_new != -1
     dL2 = centroid[edge_cellR_new[imask]] - centroid[edge_cellL_new[imask]]
     dots2 = dL2[:, 0] * geom.edge_nx[imask] + dL2[:, 1] * geom.edge_ny[imask]
-    if not (dots2 >= 0).all():
+    if not (dots2 >= -2.0 * np.spacing(centroid.max())).all():
         raise ValueError("Normal orientation broken after Hilbert reordering!")
-    _log(f"CSR/dense rebuild + orientation check done in {time.perf_counter() - _t_stage:.1f}s")
+    _log(f"CSR rebuild + orientation check done in {time.perf_counter() - _t_stage:.1f}s")
 
     # ── Sort edges by min(cellL, cellR) for GPU memory locality ───────────────
     # Threads in the same warp process consecutive edges; if those edges reference
@@ -676,16 +665,9 @@ def hilbert_reorder(
     edge_inv_perm = np.empty(E, dtype=np.int32)
     edge_inv_perm[edge_perm] = np.arange(E, dtype=np.int32)
 
-    # Update CSR and dense edge indices to use new edge numbering
+    # Update CSR edge indices to use new edge numbering
     cell_edge_idx_sorted = edge_inv_perm[cell_edge_idx_new]
     cell_edge_idx_signed_sorted = (cell_edge_idx_sorted.astype(np.int32) << 1) | cell_edge_side_new
-    cell_edges_sorted = np.where(
-        cell_edges_new >= 0,
-        edge_inv_perm[np.clip(cell_edges_new, 0, E - 1)],
-        -1,
-    )
-    # Restore -1 entries that were clipped
-    cell_edges_sorted[cell_edges_new == -1] = -1
 
     _log(
         f"edge sort by locality done in {time.perf_counter() - _t_stage:.1f}s — "
@@ -693,6 +675,7 @@ def hilbert_reorder(
     )
 
     reordered = MeshGeometry(
+        origin=geom.origin,
         centroid=centroid,
         area=area,
         zb=zb,
@@ -709,8 +692,6 @@ def hilbert_reorder(
         edge_cellR=edge_cellR_sorted,
         edge_sideL=edge_sideL_sorted,
         edge_sideR=edge_sideR_sorted,
-        cell_edges=cell_edges_sorted,
-        cell_neighbors=cell_neighbors_new,
         cell_edge_ptr=cell_edge_ptr_new,
         cell_edge_idx=cell_edge_idx_sorted,
         cell_nbr_idx=cell_nbr_idx_new,
@@ -719,6 +700,6 @@ def hilbert_reorder(
         N=N,
         E=E,
         V=geom.V,
-        max_degree=max_degree,
+        max_degree=geom.max_degree,
     )
     return reordered, perm

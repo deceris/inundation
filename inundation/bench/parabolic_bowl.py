@@ -110,7 +110,7 @@ def run_case(
     from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
     geom = build_bowl(nx)
-    x, y = geom.centroid[:, 0].astype(np.float64), geom.centroid[:, 1].astype(np.float64)
+    x, y = geom.world_centroid[:, 0].astype(np.float64), geom.world_centroid[:, 1]
     area = geom.area.astype(np.float64)
     h0, u0, v0 = exact(x, y, 0.0)
     solver = SWESolverGpuResidentBatch(

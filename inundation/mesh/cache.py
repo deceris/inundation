@@ -37,10 +37,11 @@ if TYPE_CHECKING:
 # Bump whenever build_geometry()/hilbert_reorder() output arrays change
 # shape, dtype, or semantics, so old on-disk caches are rejected instead of
 # silently served with stale/incompatible contents.
-GEOMETRY_CACHE_VERSION = 5
+GEOMETRY_CACHE_VERSION = 6
 
 # Field order matters only for readability; np.savez uses keyword storage.
 _GEOMETRY_ARRAY_FIELDS = (
+    "origin",
     "centroid",
     "area",
     "zb",
@@ -57,8 +58,6 @@ _GEOMETRY_ARRAY_FIELDS = (
     "edge_cellR",
     "edge_sideL",
     "edge_sideR",
-    "cell_edges",
-    "cell_neighbors",
     "cell_edge_ptr",
     "cell_edge_idx",
     "cell_nbr_idx",

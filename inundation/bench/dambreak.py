@@ -276,7 +276,7 @@ def _column_mean_depth(
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
     dx = spec.length_m / spec.nx
-    col = np.clip((workflow.geom.centroid[:, 0] / dx).astype(np.int64), 0, spec.nx - 1)
+    col = np.clip((workflow.geom.world_centroid[:, 0] / dx).astype(np.int64), 0, spec.nx - 1)
     sums = np.bincount(col, weights=h.astype(np.float64), minlength=spec.nx)
     counts = np.bincount(col, minlength=spec.nx)
     x_centers = (np.arange(spec.nx, dtype=np.float64) + 0.5) * dx
@@ -312,7 +312,7 @@ def _evaluate_case(
 
     area = workflow.geom.area.astype(np.float64)
     h0_solver = np.asarray(
-        np.where(workflow.geom.centroid[:, 0] < spec.dam_x_m, spec.h_up_m, spec.h_down_m),
+        np.where(workflow.geom.world_centroid[:, 0] < spec.dam_x_m, spec.h_up_m, spec.h_down_m),
         dtype=np.float64,
     )
     volume_initial = float((h0_solver * area).sum())

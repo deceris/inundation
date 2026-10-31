@@ -2,7 +2,9 @@
 
 ``inundation.mesh.geometry`` must reproduce these results bit for bit: cell and
 edge numbering set the per-cell gather order, and with it the floating-point
-result of every sum. Frozen from the code the Nysa runs were measured on.
+result of every sum. Frozen from the code the Nysa runs were measured on, apart
+from dropping two unused dense arrays. It predates the mesh origin, so it matches
+only a mesh already at its origin: compare it through ``at_origin`` in the tests.
 """
 # pyright: reportPrivateUsage=false
 
@@ -311,16 +313,8 @@ def build_geometry(
 
     cell_edge_idx_signed = (cell_edge_idx.astype(np.int32) << 1) | cell_edge_side
 
-    # ── Dense arrays (padded to max_degree, backward compat) ──────────────────
-    cell_edges = np.full((n, max_degree), -1, dtype=np.int32)
-    cell_neighbors = np.full((n, max_degree), -1, dtype=np.int32)
-    for ci in range(n):
-        s, e = int(cell_edge_ptr[ci]), int(cell_edge_ptr[ci + 1])
-        d = e - s
-        cell_edges[ci, :d] = cell_edge_idx[s:e]
-        cell_neighbors[ci, :d] = cell_nbr_idx[s:e]
-
     return MeshGeometry(
+        origin=np.zeros(2, dtype=np.float64),
         centroid=centroid,
         area=area,
         zb=zb,
@@ -337,8 +331,6 @@ def build_geometry(
         edge_cellR=edge_cellR,
         edge_sideL=edge_sideL,
         edge_sideR=edge_sideR,
-        cell_edges=cell_edges,
-        cell_neighbors=cell_neighbors,
         cell_edge_ptr=cell_edge_ptr,
         cell_edge_idx=cell_edge_idx,
         cell_nbr_idx=cell_nbr_idx,
@@ -450,17 +442,6 @@ def hilbert_reorder(
         new_nbrs = np.where(old_nbrs == -1, -1, inv_perm[old_nbrs])
         cell_nbr_idx_new[new_s : new_s + d] = new_nbrs
 
-    # Dense arrays (padded)
-    max_degree = geom.max_degree
-    cell_edges_new = np.full((N, max_degree), -1, dtype=np.int32)
-    cell_neighbors_new = np.full((N, max_degree), -1, dtype=np.int32)
-    for ci in range(N):
-        s = int(cell_edge_ptr_new[ci])
-        e = int(cell_edge_ptr_new[ci + 1])
-        d = e - s
-        cell_edges_new[ci, :d] = cell_edge_idx_new[s:e]
-        cell_neighbors_new[ci, :d] = cell_nbr_idx_new[s:e]
-
     # Verify normal orientation (>= 0 tolerates degenerate zero-area cells)
     imask = edge_cellR_new != -1
     dL2 = centroid[edge_cellR_new[imask]] - centroid[edge_cellL_new[imask]]
@@ -496,15 +477,9 @@ def hilbert_reorder(
     # Update CSR and dense edge indices to use new edge numbering
     cell_edge_idx_sorted = edge_inv_perm[cell_edge_idx_new]
     cell_edge_idx_signed_sorted = (cell_edge_idx_sorted.astype(np.int32) << 1) | cell_edge_side_new
-    cell_edges_sorted = np.where(
-        cell_edges_new >= 0,
-        edge_inv_perm[np.clip(cell_edges_new, 0, E - 1)],
-        -1,
-    )
-    # Restore -1 entries that were clipped
-    cell_edges_sorted[cell_edges_new == -1] = -1
 
     reordered = MeshGeometry(
+        origin=geom.origin,
         centroid=centroid,
         area=area,
         zb=zb,
@@ -521,8 +496,6 @@ def hilbert_reorder(
         edge_cellR=edge_cellR_sorted,
         edge_sideL=edge_sideL_sorted,
         edge_sideR=edge_sideR_sorted,
-        cell_edges=cell_edges_sorted,
-        cell_neighbors=cell_neighbors_new,
         cell_edge_ptr=cell_edge_ptr_new,
         cell_edge_idx=cell_edge_idx_sorted,
         cell_nbr_idx=cell_nbr_idx_new,
@@ -531,6 +504,6 @@ def hilbert_reorder(
         N=N,
         E=E,
         V=geom.V,
-        max_degree=max_degree,
+        max_degree=geom.max_degree,
     )
     return reordered, perm

@@ -291,8 +291,8 @@ def _run_once(
 def _cell_radius(workflow: SWEWorkflow, spec: RadialSpec) -> NDArray[np.float64]:
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    cx = workflow.geom.centroid[:, 0].astype(np.float64) - spec.center_m
-    cy = workflow.geom.centroid[:, 1].astype(np.float64) - spec.center_m
+    cx = workflow.geom.world_centroid[:, 0] - spec.center_m
+    cy = workflow.geom.world_centroid[:, 1] - spec.center_m
     return np.sqrt(cx * cx + cy * cy)
 
 
@@ -331,8 +331,8 @@ def _sector_front_radii(
     """Bore-front radius per angular sector (for the isotropy check)."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    cx = workflow.geom.centroid[:, 0].astype(np.float64) - spec.center_m
-    cy = workflow.geom.centroid[:, 1].astype(np.float64) - spec.center_m
+    cx = workflow.geom.world_centroid[:, 0] - spec.center_m
+    cy = workflow.geom.world_centroid[:, 1] - spec.center_m
     r = np.sqrt(cx * cx + cy * cy)
     theta = np.arctan2(cy, cx)  # [-pi, pi)
     sector = ((theta + np.pi) / (2.0 * np.pi) * N_SECTORS).astype(np.int64) % N_SECTORS

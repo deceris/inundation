@@ -59,7 +59,7 @@ class PointSource:
     """Volumetric source over a circular area.
 
     discharge_m3s: total discharge assigned to this source [m^3/s].
-    center_xy:     source center in mesh coordinates.
+    center_xy:     source center in the mesh file's coordinates.
     radius_m:      source radius in mesh units.
     """
 
@@ -425,10 +425,12 @@ def _build_phase_source_rate(
 ) -> NDArray[np.float32]:
     """Build per-cell source array [m^3/s] for one phase."""
     src = np.zeros(geom.N, dtype=np.float32)
+    origin_x, origin_y = geom.origin.tolist()
     for source in phase.sources:
+        center_x, center_y = source.center_xy
         mask = select_cells_within_radius(
             geom.centroid,
-            source.center_xy,
+            (center_x - origin_x, center_y - origin_y),
             source.radius_m,
             valid_mask=valid_cell,
             cell_vertices=geom.cell_vertices,
@@ -465,7 +467,7 @@ class SWEWorkflow:
         self.config = config
         self.geom: MeshGeometry | None = None
         self.perm: NDArray[np.int32] | None = None
-        self.verts: NDArray[np.float32] | None = None
+        self.verts: NDArray[np.float64] | None = None
         self.faces_flat: NDArray[np.int32] | None = None
         self.face_offsets: NDArray[np.int32] | None = None
         self.zb_from_file: NDArray[np.float32] | None = None
@@ -514,7 +516,7 @@ class SWEWorkflow:
                 f"{cache_meta.mesh_source}, hilbert={cache_meta.use_hilbert_reorder})"
             )
 
-        verts: NDArray[np.float32] | None = None
+        verts: NDArray[np.float64] | None = None
         faces_flat: NDArray[np.int32] | None = None
         face_offsets: NDArray[np.int32] | None = None
         zb_from_file: NDArray[np.float32] | None = None

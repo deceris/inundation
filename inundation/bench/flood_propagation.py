@@ -440,7 +440,9 @@ def _gauge_cells(workflow: SWEWorkflow, gauges: NDArray[np.float64]) -> NDArray[
     """Solver cell nearest each published output point."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    return nearest_cell_indices(workflow.geom.centroid[:, 0], workflow.geom.centroid[:, 1], gauges)
+    return nearest_cell_indices(
+        workflow.geom.world_centroid[:, 0], workflow.geom.world_centroid[:, 1], gauges
+    )
 
 
 def _arrival_times(
@@ -700,8 +702,8 @@ def _run_group(
             grid = np.zeros((spec.ny, spec.nx), dtype=np.float64)
             # geom is non-None: _run_once prepares the workflow before returning it
             # and the guard above re-checks, so re-testing per pick is dead code.
-            cx = gif_workflow.geom.centroid[:, 0]
-            cy = gif_workflow.geom.centroid[:, 1]
+            cx = gif_workflow.geom.world_centroid[:, 0]
+            cy = gif_workflow.geom.world_centroid[:, 1]
             col = np.clip((cx / (spec.domain_x_m / spec.nx)).astype(int), 0, spec.nx - 1)
             row = np.clip((cy / (spec.domain_y_m / spec.ny)).astype(int), 0, spec.ny - 1)
             grid[row, col] = gif_result.snapshots[pick]

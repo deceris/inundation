@@ -36,16 +36,25 @@ if TYPE_CHECKING:
 
     from inundation.mesh.geometry import MeshGeometry
 
-# Nysa-like coordinates, then UTM-like ones: their larger shoelace terms make
-# float64 summation order visible through the float32 cast.
+# Nysa-like coordinates, then UTM-like ones, whose float32 rounding skews cells.
 ORIGIN = (380_000.0, 290_000.0)
 UTM_ORIGIN = (500_000.0, 5_500_000.0)
+
+
+def at_origin(verts: NDArray[np.float32]) -> NDArray[np.float32]:
+    """``verts`` moved to their origin, the only mesh the old build can match.
+
+    The result is exact: both terms sit on the same float32 grid.
+    """
+    return (verts.astype(np.float64) - verts.min(axis=0)).astype(np.float32)
 
 
 def _assert_identical(a: MeshGeometry, b: MeshGeometry) -> None:
     for name in _GEOMETRY_SCALAR_FIELDS:
         assert getattr(a, name) == getattr(b, name), name
     for name in _GEOMETRY_ARRAY_FIELDS:
+        if name == "origin":
+            continue
         x, y = getattr(a, name), getattr(b, name)
         if x is None or y is None:
             assert x is y, name
@@ -143,7 +152,7 @@ def test_mixed_degree_mesh_is_bit_identical(seed: int, origin: tuple[float, floa
         "zb_from_file": zb,
         "manning_n_from_file": manning,
     }
-    old = reference.build_geometry(verts, faces, **args)
+    old = reference.build_geometry(at_origin(verts), faces, **args)
     new = build_geometry(verts, faces, **args)
     _assert_identical(new, old)
 
@@ -174,7 +183,7 @@ def test_uniform_degree_mesh_is_bit_identical() -> None:
     zb = _bed(rng, 200)
     _assert_identical(
         build_geometry(verts, faces, zb_from_file=zb),
-        reference.build_geometry(verts, faces, zb_from_file=zb),
+        reference.build_geometry(at_origin(verts), faces, zb_from_file=zb),
     )
 
 
@@ -185,7 +194,7 @@ def test_edge_shared_by_three_cells_keeps_the_first_two() -> None:
     zb = np.zeros(4, dtype=np.float32)
     _assert_identical(
         build_geometry(verts, faces, offsets, zb_from_file=zb),
-        reference.build_geometry(verts, faces, offsets, zb_from_file=zb),
+        reference.build_geometry(at_origin(verts), faces, offsets, zb_from_file=zb),
     )
 
 
@@ -209,7 +218,7 @@ def test_hilbert_permutation_ties_keep_file_order() -> None:
 
 def _old_weld(
     polygons: list[list[tuple[float, float]]],
-) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
+) -> tuple[NDArray[np.float64], NDArray[np.int32], NDArray[np.int32]]:
     ids: dict[tuple[float, float], int] = {}
     flat: list[int] = []
     offsets = [0]
@@ -218,7 +227,7 @@ def _old_weld(
             flat.append(ids.setdefault(point, len(ids)))
         offsets.append(len(flat))
     return (
-        np.array(list(ids), dtype=np.float32),
+        np.array(list(ids), dtype=np.float64),
         np.array(flat, dtype=np.int32),
         np.array(offsets, dtype=np.int32),
     )
@@ -251,7 +260,7 @@ def test_parquet_load_numbers_vertices_as_first_met(tmp_path: Path) -> None:
     assert verts.tobytes() == expected[0].tobytes()
     assert faces.tobytes() == expected[1].tobytes()
     assert offsets.tobytes() == expected[2].tobytes()
-    assert verts.dtype == np.float32
+    assert verts.dtype == np.float64
     assert faces.dtype == np.int32
     assert offsets.dtype == np.int32
     assert 5.0 not in zb_read.tolist()

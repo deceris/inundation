@@ -35,7 +35,7 @@ def _load_optional_manning_n(values: object) -> NDArray[np.float32]:
 
 def _weld_polygons(
     geoms: NDArray[Any],
-) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
+) -> tuple[NDArray[np.float64], NDArray[np.int32], NDArray[np.int32]]:
     """Vertices and flat faces of polygons, numbering vertices as they are first met.
 
     Vertices weld on their exact float64 coordinates. Interior rings are ignored.
@@ -75,13 +75,13 @@ def _weld_polygons(
     id_by_first_use[by_use] = np.arange(first_use.size, dtype=np.int32)
     faces = np.empty(total, dtype=np.int32)
     faces[order] = id_by_first_use[np.cumsum(new_point) - 1]
-    return xy[first_use[by_use]].astype(np.float32), faces, offsets
+    return xy[first_use[by_use]], faces, offsets
 
 
 def load_mesh_file(
     path: str,
 ) -> tuple[
-    NDArray[np.float32],
+    NDArray[np.float64],
     NDArray[np.int32],
     NDArray[np.int32],
     NDArray[np.float32],
@@ -102,7 +102,7 @@ def load_mesh_file(
 
     Returns
     -------
-    verts               : (V, 2) float32   vertex (x, y) coordinates
+    verts               : (V, 2) float64   vertex (x, y) coordinates, as in the file
     faces               : (sum_of_degrees,) int32  flat vertex indices for all faces
     face_offsets        : (N+1,) int32  face i has verts faces[face_offsets[i]:face_offsets[i+1]]
     zb_from_file        : (N,) float32  required per-cell bed elevations
@@ -202,7 +202,7 @@ def load_mesh_file(
         if not np.isfinite(vertex_z).all():
             raise ValueError(f"OBJ file '{path}' contains non-finite vertex elevations")
 
-        verts = np.array(vert_list, dtype=np.float32)
+        verts = np.array(vert_list, dtype=np.float64)
         faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
         offsets = np.zeros(len(faces_list) + 1, dtype=np.int32)
         for i, f in enumerate(faces_list):

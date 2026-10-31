@@ -507,8 +507,8 @@ def _nearest_cell(workflow: SWEWorkflow, xy: tuple[float, float]) -> int:
         raise RuntimeError("workflow must be prepared")
     return int(
         nearest_cell_indices(
-            workflow.geom.centroid[:, 0],
-            workflow.geom.centroid[:, 1],
+            workflow.geom.world_centroid[:, 0],
+            workflow.geom.world_centroid[:, 1],
             np.asarray([xy], dtype=np.float64),
         )[0]
     )

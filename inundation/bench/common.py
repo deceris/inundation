@@ -292,7 +292,7 @@ def build_fingerprint(
 
 def _mesh_vertices_for_plot(
     workflow: SWEWorkflow,
-) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
+) -> tuple[NDArray[np.float64], NDArray[np.int32], NDArray[np.int32]]:
     """Raw (verts, faces, face_offsets) for plotting, re-reading the mesh if needed.
 
     ``prepare()`` only populates these on the mesh-file path — a geometry-cache
@@ -345,7 +345,7 @@ def save_depth_png(
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
 
-    polygons_reordered: list[NDArray[np.float32]] = []
+    polygons_reordered: list[NDArray[np.float64]] = []
     for new_i in range(n_cells):
         old_i = int(perm[new_i])
         idx = faces_flat[face_offsets[old_i] : face_offsets[old_i + 1]]
@@ -388,14 +388,14 @@ def save_depth_png(
 
 def _reordered_polygons(
     workflow: SWEWorkflow,
-) -> tuple[list[NDArray[np.float32]], NDArray[np.float32]]:
+) -> tuple[list[NDArray[np.float64]], NDArray[np.float64]]:
     """Build per-cell polygons (solver order) + vertex array for plotting."""
     if workflow.geom is None or workflow.perm is None:
         raise RuntimeError("Workflow must be prepared before plotting depth")
     verts, faces_flat, face_offsets = _mesh_vertices_for_plot(workflow)
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
-    polygons: list[NDArray[np.float32]] = []
+    polygons: list[NDArray[np.float64]] = []
     for new_i in range(n_cells):
         old_i = int(perm[new_i])
         idx = faces_flat[face_offsets[old_i] : face_offsets[old_i + 1]]
@@ -575,7 +575,7 @@ def save_profile_gif(
     if not frames:
         raise RuntimeError("gif run produced no usable snapshots")
 
-    cx = np.asarray(workflow.geom.centroid[:, 0], np.float64)
+    cx = workflow.geom.world_centroid[:, 0]
     zb = np.asarray(workflow.geom.zb, np.float64)
 
     # Aggregate into along-channel bins (average across the width per x).
@@ -798,19 +798,14 @@ def build_pipeline_like_phases(
     valid_indices = np.flatnonzero(valid)
     if valid_indices.size < MIN_VALID_CELLS:
         raise RuntimeError("Benchmark mesh must contain at least two valid cells")
-    sorted_indices = valid_indices[np.argsort(workflow.geom.centroid[valid_indices, 0])]
+    world = workflow.geom.world_centroid
+    sorted_indices = valid_indices[np.argsort(world[valid_indices, 0])]
     source_a = int(sorted_indices[sorted_indices.size // 3])
     source_b = int(sorted_indices[(sorted_indices.size * 2) // 3])
     radius_a = max(1.0, float(np.sqrt(workflow.geom.area[source_a] / np.pi)))
     radius_b = max(1.0, float(np.sqrt(workflow.geom.area[source_b] / np.pi)))
-    center_a = (
-        float(workflow.geom.centroid[source_a, 0]),
-        float(workflow.geom.centroid[source_a, 1]),
-    )
-    center_b = (
-        float(workflow.geom.centroid[source_b, 0]),
-        float(workflow.geom.centroid[source_b, 1]),
-    )
+    center_a = (float(world[source_a, 0]), float(world[source_a, 1]))
+    center_b = (float(world[source_b, 0]), float(world[source_b, 1]))
 
     def _phase(flow_rates: tuple[float, float]) -> SimulationPhase:
         return SimulationPhase(
