@@ -1,6 +1,6 @@
 # Coordinate Origin — Plan
 
-**Status: in progress.** Second of the four solver items for the pavé meshes. This
+**Status: done.** Second of the four solver items for the pavé meshes. This
 one changes the mesh arrays, so it sets a new baseline.
 
 ## Goal

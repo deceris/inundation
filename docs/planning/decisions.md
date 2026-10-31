@@ -245,3 +245,15 @@ exception to doing the simplest thing is that cells are summed per degree rather
 than with `np.bincount`, whose rounding differs. The old build stays in the tests
 as the oracle. `hilbertcurve` is now only used by tests. Evidence:
 [`27-fast-mesh-build/`](../implementation/27-fast-mesh-build/results.md).
+
+## Mesh coordinates are local to an origin
+
+Every coordinate on `MeshGeometry` is relative to the mesh's lower-left corner,
+stored as `origin`. Geometry is computed in float64 from those local coordinates and
+only the results are cast to `float32`, rather than casting local vertices and
+computing from them, so accuracy no longer depends on the map position at all.
+Real-world coordinates stay at the edge: `PointSource` takes them, and benches read
+`world_centroid`. Lower-left was chosen over a centred origin, which would gain one
+bit on values that no longer feed the solver. The change sets a new baseline for
+real meshes and leaves meshes at zero untouched. Evidence:
+[`28-coordinate-origin/`](../implementation/28-coordinate-origin/results.md).
