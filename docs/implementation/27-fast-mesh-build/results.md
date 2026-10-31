@@ -14,7 +14,20 @@ All 31 arrays are bit-identical to the build at `4c9fa8b` on both meshes.
 
 The 31 are the 23 arrays of `_GEOMETRY_ARRAY_FIELDS`, the 4 scalars, `perm` and
 the loader's vertices, faces and offsets. Because the build is identical, step
-counts cannot change, and no solver run was needed.
+counts cannot change. The solver runs below confirm that.
+
+## End-to-end runs
+
+The 24 h Nysa run through `flood.py` at `d074793`, starting from no cache:
+
+| Mesh | Steps | Prepare | `depth.parquet` |
+| --- | --- | --- | --- |
+| Floored Nysa | 682 876 | 25–26 s | 63 of 63 columns bit-identical |
+| Unfloored Nysa | 1 125 485 | 25–26 s | 63 of 63 columns bit-identical |
+
+Both step counts match the earlier runs exactly. All Nysa cells are already
+counter-clockwise, so these runs do not reach the clockwise handling; only the
+unit tests below cover it.
 
 ## Time and memory
 
@@ -53,9 +66,49 @@ The stages of the 495 s run:
 
 Peak resident memory is 22 GiB. Peak footprint is 41.5 GB and includes the GPU
 buffers. The geometry cache is 8.0 GB. A 10 s run from a point source then took
-16 steps and held exact volume (50.000 m³ injected, 50.000 m³ in the domain). The
-old build was not run on the mosaic, so its time is only a projection, and the
-build has no bit-identity proof at that size.
+16 steps and held exact volume (50.000 m³ injected, 50.000 m³ in the domain).
+
+### Mosaic bit-identity
+
+Scaled from the slices below, the old build needs about 65–70 GB on the mosaic and
+does not fit in the machine's 64 GB. It was never run whole, so the projected 40
+minutes stays a projection.
+Each stage was compared separately instead:
+
+| Stage | Compared on | Result |
+| --- | --- | --- |
+| Load | full mosaic, old against new | 5 of 5 arrays identical |
+| Reorder | full mosaic, both fed by the new build | 28 of 28 array hashes identical |
+| Load, build, reorder | first 12 M cells, old against new | 5, 27, 28 arrays identical |
+| Load, build, reorder | last 12 M cells, old against new | 5, 27, 28 arrays identical |
+
+The two slices hold 86.5 % of the cells. The other 13.5 % sit between them and were
+never in an old build, and neither was any edge joining the two slices. For those
+cells, the new build on the full mosaic rests on these checks, which do not use
+the old code:
+
+- `perm` is a permutation, and elevation, Manning and cell degree follow it.
+- Areas match a local-frame shoelace, with total area 2973.581 km² both ways.
+- Every centroid lies inside its bounding box.
+- Every CSR slot names its own cell, and every CSR neighbour is the other cell of
+  that edge.
+- The 130 786 953 CSR slots equal the edges seen from both sides, with 23 713
+  boundary edges, and CSR degree equals polygon degree in every cell.
+- Edges are sorted by lower cell, and every cell boundary closes: the largest
+  `|Σ n L|` over perimeter is 6.3e-08, which is rounding.
+
+The sort keys stay far inside int64: `V*(V+1)` is 1.42e15 against 9.2e18.
+
+Stage times on the full mosaic in these runs:
+
+| Stage | Old code | New code |
+| --- | --- | --- |
+| Load | 543 s | 177 s |
+| Build | not run | 106 s |
+| Reorder | 380 s | 71 s |
+
+On a 12 M-cell slice the old build takes 619–626 s and 29 GiB, and the new one
+33–34 s and 10 GiB.
 
 ## Rounding traps in the prototype
 
