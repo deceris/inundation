@@ -54,6 +54,10 @@ SIM_DT_MAX_TICKS = 1 << 24
 # workgroup. The resident kernels hard-code it as local_size_x and ``>> 8``.
 ACTIVE_BLOCK_CELLS = 256
 
+# Backends whose run() returns hu and hv snapshots. The others accept the flag
+# for interface compatibility but return depth only, so the workflow refuses it.
+MOMENTUM_SNAPSHOT_BACKENDS = frozenset({"baseline", "gpu_resident_batch"})
+
 
 # ── Workflow (workflow.py) ────────────────────────────────────────────────────
 MIN_NDIM_NPY_INPUT = 2

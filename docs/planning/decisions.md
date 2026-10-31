@@ -227,3 +227,12 @@ momentum decays at a rate, semi-implicit like friction, because a fixed factor
 per stage made results depend on the tick size. This gives back a little of the
 bowl gain and removes the dependence. Evidence:
 [`24-solver-accuracy-fixes/`](../implementation/24-solver-accuracy-fixes/results.md).
+
+## Momentum snapshots fail loudly
+
+Requesting momentum on a backend that cannot provide it now raises, naming the
+backend, instead of returning `None`. Support is an explicit list rather than a
+signature check, because most backends accept the flag and ignore it. Benches
+ask only where it is supported, so they keep working on the barrier backend.
+Evidence:
+[`26-momentum-snapshots/`](../implementation/26-momentum-snapshots/results.md).

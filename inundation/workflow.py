@@ -27,6 +27,7 @@ from .tuning import (
     DRY_TOL_DEFAULT,
     GRAVITY_G,
     MIN_NDIM_NPY_INPUT,
+    MOMENTUM_SNAPSHOT_BACKENDS,
     NPY_COLS_HUV,
     NPY_COLS_WITH_MANNING,
     REQUIRED_CLI_ARGS,
@@ -110,6 +111,9 @@ class WorkflowConfig:
     # takes precedence over geometry_cache_dir and mesh_source, which are then
     # never read.
     geometry_cache_source: str | os.PathLike[str] | None = None
+    # Keep hu and hv of every snapshot in host memory, aligned with snapshots.
+    # 8 bytes per cell per output on top of the depth. Only the backends in
+    # MOMENTUM_SNAPSHOT_BACKENDS can do it; any other raises here.
     capture_momentum_snapshots: bool = False
     steps_per_graph: int | None = None
     # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
@@ -158,6 +162,11 @@ class WorkflowConfig:
             "gpu_resident_batch",
         }:
             raise ValueError(f"unsupported solver_impl: {self.solver_impl}")
+        if self.capture_momentum_snapshots and self.solver_impl not in MOMENTUM_SNAPSHOT_BACKENDS:
+            raise ValueError(
+                f"capture_momentum_snapshots is not supported by solver_impl "
+                f"{self.solver_impl!r}; use one of {sorted(MOMENTUM_SNAPSHOT_BACKENDS)}"
+            )
 
 
 @dataclass
@@ -674,23 +683,13 @@ class SWEWorkflow:
             t_end = t_current + phase.duration_s
             src = _build_phase_source_rate(self.geom, phase, valid_cell)
 
-            # Backend-specific extras: the barrier backend switches snapshot
-            # cadence to step-count based; momentum capture is only offered by
-            # backends whose run() exposes the flag (checked via inspect).
+            # Backend-specific extra: the barrier backend switches snapshot
+            # cadence to step-count based.
             output_every_steps: int | None = None
             if self.config.solver_impl == "fixed_dt_batch_barrier":
                 # __post_init__ guarantees a positive int when set.
                 output_every_steps = self.config.output_every_steps
 
-            capture_momentum = self.config.capture_momentum_snapshots
-            if capture_momentum:
-                import inspect
-
-                if (
-                    "capture_momentum_snapshots"
-                    not in inspect.signature(self.solver.run).parameters
-                ):
-                    capture_momentum = False
             phase_result = self.solver.run(
                 t_end=t_end,
                 output_interval_s=self.config.output_interval_s,
@@ -702,13 +701,24 @@ class SWEWorkflow:
                 t_start=t_current,
                 cfl_interval=self.config.cfl_interval,
                 output_every_steps=output_every_steps,
-                capture_momentum_snapshots=capture_momentum,
+                capture_momentum_snapshots=self.config.capture_momentum_snapshots,
             )
             if len(phase_result) == 4:
                 phase_snapshots, phase_times, phase_hu, phase_hv = phase_result
                 if hu_snapshots is not None and hv_snapshots is not None:
+                    if not len(phase_hu) == len(phase_hv) == len(phase_snapshots):
+                        raise RuntimeError(
+                            f"solver_impl {self.config.solver_impl!r} returned "
+                            f"{len(phase_hu)} hu and {len(phase_hv)} hv snapshots for "
+                            f"{len(phase_snapshots)} depth snapshots"
+                        )
                     hu_snapshots.extend(phase_hu)
                     hv_snapshots.extend(phase_hv)
+            elif hu_snapshots is not None:
+                raise RuntimeError(
+                    f"solver_impl {self.config.solver_impl!r} returned no momentum "
+                    "snapshots although capture_momentum_snapshots is set"
+                )
             else:
                 phase_snapshots, phase_times = phase_result
 
@@ -760,12 +770,8 @@ class SWEWorkflow:
             steps_total=int(getattr(self.solver, "steps_total", 0)),
             hu_final=hu_final,
             hv_final=hv_final,
-            hu_snapshots=hu_snapshots
-            if hu_snapshots and len(hu_snapshots) == len(snapshots)
-            else None,
-            hv_snapshots=hv_snapshots
-            if hv_snapshots and len(hv_snapshots) == len(snapshots)
-            else None,
+            hu_snapshots=hu_snapshots,
+            hv_snapshots=hv_snapshots,
             clamp_mass_m3=clamp_mass_m3,
         )
 

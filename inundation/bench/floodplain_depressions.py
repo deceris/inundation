@@ -391,7 +391,6 @@ def _make_workflow(
     *,
     output_interval_s: float,
     progress: bool,
-    capture_momentum_snapshots: bool = False,
 ) -> SWEWorkflow:
     config = WorkflowConfig(
         mesh_source=str(mesh_path),
@@ -402,7 +401,6 @@ def _make_workflow(
         cfl_interval=spec.cfl_interval,
         cfl=spec.cfl,
         progress=progress,
-        capture_momentum_snapshots=capture_momentum_snapshots,
         initial_state_source=_initial_state(spec),
         initial_state_order="original",
         solver_impl=backend,
@@ -419,7 +417,6 @@ def _run_once(
     *,
     output_interval_s: float,
     progress: bool,
-    capture_momentum_snapshots: bool = False,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     workflow = _make_workflow(
         spec,
@@ -427,7 +424,6 @@ def _run_once(
         backend,
         output_interval_s=output_interval_s,
         progress=progress,
-        capture_momentum_snapshots=capture_momentum_snapshots,
     )
     result = workflow.run(_hydrograph_phases(spec))
     return workflow, result
@@ -635,7 +631,6 @@ def _run_group(
             backend,
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
-            capture_momentum_snapshots=True,
         )
         # The solver snapshots every phase boundary too, so the 91 one-minute
         # hydrograph phases would otherwise crowd the first 3% of the run.

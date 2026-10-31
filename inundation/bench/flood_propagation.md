@@ -63,8 +63,8 @@ and keeps the default backend on its GPU-resident path. It ends exactly at
 - **Scored run** to 5 h, snapshots every 60 s → mass balance, front-arrival
   times at the six gauges, determinism.
 - **Untimed probe run** to `--probe-time` → its final state carries `h`, `hu`
-  and `hv`, giving depth *and velocity* against the reference. Snapshots are
-  depth-only, so velocity needs its own run.
+  and `hv`, giving depth *and velocity* against the reference. The scored run
+  keeps depth snapshots only, so velocity needs its own run.
 
 ### Validity window
 

@@ -75,6 +75,7 @@ from inundation.bench.common import (
     water_surface_elevation,
     write_mesh_parquet,
 )
+from inundation.tuning import MOMENTUM_SNAPSHOT_BACKENDS
 from inundation.workflow import (
     PointSource,
     SimulationPhase,
@@ -697,7 +698,7 @@ def _run_group(
             backend,
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
-            capture_momentum_snapshots=True,
+            capture_momentum_snapshots=backend in MOMENTUM_SNAPSHOT_BACKENDS,
         )
         cells = np.asarray(
             [

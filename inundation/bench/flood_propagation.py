@@ -68,7 +68,7 @@ from inundation.bench.common import (
     water_surface_elevation,
     write_mesh_parquet,
 )
-from inundation.tuning import GRAVITY_G
+from inundation.tuning import GRAVITY_G, MOMENTUM_SNAPSHOT_BACKENDS
 from inundation.workflow import (
     PointSource,
     SimulationPhase,
@@ -656,7 +656,7 @@ def _run_group(
             t_end_s=spec.t_end_s,
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
-            capture_momentum_snapshots=True,
+            capture_momentum_snapshots=backend in MOMENTUM_SNAPSHOT_BACKENDS,
         )
         # The solver snapshots every phase boundary too, so the 60 s hydrograph
         # phases would otherwise dominate the frame list.

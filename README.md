@@ -371,8 +371,9 @@ gpd.GeoDataFrame(
 - `h_final`: final depth in solver order;
 - `hu_final` and `hv_final`: final momentum in solver order, when exposed by
   the backend;
-- `hu_snapshots` and `hv_snapshots`: optional momentum arrays aligned with
-  `snapshots`;
+- `hu_snapshots` and `hv_snapshots`: momentum arrays aligned one-for-one with
+  `snapshots` and `snap_times` when `capture_momentum_snapshots=True`, otherwise
+  `None`;
 - `volume_final_m3` and `volume_injected_m3`: final and scheduled source
   volumes;
 - `wall_seconds` and `steps_total`: runtime measurements;
@@ -403,8 +404,16 @@ dispatches) and refuses to run. Validate backend behavior on the target
 Vulkan driver before using a performance-oriented path in production.
 
 `hu_final` and `hv_final` are needed to write a complete warm-start state.
-Momentum snapshots require `capture_momentum_snapshots=True` and backend
-support.
+Momentum snapshots require `capture_momentum_snapshots=True` on
+`gpu_resident_batch` or `baseline`. Every other backend raises a `ValueError`
+naming the backend when the `WorkflowConfig` is created. The snapshots are read
+only at output times, so they add no per-step cost and do not change the
+simulation.
+
+All snapshots are held in host memory until the run ends. Momentum adds 8 bytes
+per cell per output on top of the 4 of depth: at 2.35 M cells, `hu` + `hv` is
+about 19 MB per output, or about 5.4 GB for 288 outputs. Check that the run's
+output count fits before enabling the flag on a large mesh.
 
 ## Benchmarks
 

@@ -582,6 +582,10 @@ class SWESolverGpuResidentBatch(SWESolver):
 
         ``cfl_interval`` is accepted for interface compatibility and ignored:
         the CFL bound is recomputed every step.
+
+        With ``capture_momentum_snapshots``, also returns the ``hu`` and ``hv``
+        of every snapshot. Each pair is read while the device is idle between
+        graphs, so the flag adds no sync point inside a graph.
         """
         if source_fn is not None:
             raise ValueError(
@@ -615,6 +619,15 @@ class SWESolverGpuResidentBatch(SWESolver):
             self.download_h().copy() if resume else self._h0.copy()
         ]
         snap_times: list[float] = [ticks_to_seconds(start_ticks)]
+        hu_snapshots: list[NDArray[np.float32]] = []
+        hv_snapshots: list[NDArray[np.float32]] = []
+
+        def capture_momentum() -> None:
+            if capture_momentum_snapshots:
+                hu_snapshots.append(self.download_hu())
+                hv_snapshots.append(self.download_hv())
+
+        capture_momentum()
 
         ctrl = self._ctrl
         ctrl["now_ticks"] = start_ticks
@@ -662,6 +675,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             if not np.isfinite(h_snap).all():
                 snapshots.append(np.nan_to_num(h_snap, nan=0.0, posinf=0.0).copy())
                 snap_times.append(ticks_to_seconds(stop_ticks))
+                capture_momentum()
                 finite = False
                 break
             # The final window may end short of a full interval: that is the end
@@ -676,6 +690,7 @@ class SWESolverGpuResidentBatch(SWESolver):
                     sys.stdout.flush()
                 snapshots.append(h_snap.copy())
                 snap_times.append(ticks_to_seconds(stop_ticks))
+                capture_momentum()
 
         self.steps_total += int(ctrl["steps"][0])
 
@@ -684,7 +699,10 @@ class SWESolverGpuResidentBatch(SWESolver):
             if not np.allclose(snapshots[-1], h_final):
                 snapshots.append(h_final.copy())
                 snap_times.append(ticks_to_seconds(int(ctrl["now_ticks"][0])))
+                capture_momentum()
 
+        if capture_momentum_snapshots:
+            return snapshots, snap_times, hu_snapshots, hv_snapshots
         return snapshots, snap_times
 
     def _log_progress(

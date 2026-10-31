@@ -23,3 +23,4 @@
 - [`22-active-set/`](implementation/22-active-set/)
 - [`23-deterministic-accumulation/`](implementation/23-deterministic-accumulation/)
 - [`24-solver-accuracy-fixes/`](implementation/24-solver-accuracy-fixes/)
+- [`26-momentum-snapshots/`](implementation/26-momentum-snapshots/)
