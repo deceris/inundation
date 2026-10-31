@@ -1,6 +1,6 @@
 """Disk cache for preprocessed ``MeshGeometry``.
 
-``build_geometry`` and ``hilbert_reorder`` are Python-loop heavy. The cache
+Building the geometry takes minutes on a multi-million-cell mesh. The cache
 avoids rebuilding identical geometry for repeated benchmark runs.
 
 Two layers are provided:

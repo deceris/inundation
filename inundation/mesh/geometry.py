@@ -19,14 +19,12 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
-from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.typing import NDArray
 
 from ..tuning import (
     EDGE_LENGTH_EPSILON,
     FACE_NDIM,
     MIN_CELL_AREA,
-    POLYGON_AREA_EPSILON,
     POLYGON_CENTROID_EPSILON,
 )
 
@@ -124,26 +122,128 @@ class MeshGeometry:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _shoelace_area(poly_verts: NDArray[np.float32]) -> float:
-    """Signed area of a simple polygon via the shoelace formula (float64)."""
-    x = poly_verts[:, 0].astype(np.float64)
-    y = poly_verts[:, 1].astype(np.float64)
-    return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+def _mixed_degree_cells(
+    verts: NDArray[np.float32],
+    faces: NDArray[np.int32],
+    face_offsets: NDArray[np.int32],
+    degrees: NDArray[np.int32],
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Area and centroid per cell, orienting clockwise cells in ``faces`` in place.
+
+    Cells are taken one degree at a time because ``np.sum`` over a row is not a
+    sequential sum from 8 terms up, so ``np.bincount`` would round differently
+    and change the mesh. A clockwise cell's area keeps its original summation
+    order and its centroid uses the reversed one.
+    """
+    area = np.empty(degrees.size, dtype=np.float32)
+    centroid = np.empty((degrees.size, 2), dtype=np.float32)
+    for degree in np.unique(degrees).tolist():
+        cells = np.flatnonzero(degrees == degree)
+        slots = face_offsets[cells, np.newaxis].astype(np.int64) + np.arange(degree)
+        cell_faces = faces[slots]
+        xy = verts[cell_faces].astype(np.float64)
+        x, y = xy[:, :, 0], xy[:, :, 1]
+        cross = x * np.roll(y, -1, axis=1) - np.roll(x, -1, axis=1) * y
+        signed_area = 0.5 * np.sum(cross, axis=1)
+
+        clockwise = signed_area < 0
+        if clockwise.any():
+            cell_faces[clockwise] = cell_faces[clockwise, ::-1]
+            faces[slots] = cell_faces
+            xy = verts[cell_faces].astype(np.float64)
+            x, y = xy[:, :, 0], xy[:, :, 1]
+            cross = x * np.roll(y, -1, axis=1) - np.roll(x, -1, axis=1) * y
+            signed_area = np.abs(signed_area)
+        area[cells] = np.maximum(signed_area, 1e-30)
+
+        # A zero-area cell divides by zero here and is refused by the sliver
+        # check right after.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            six_area = 6.0 * signed_area
+            centroid[cells, 0] = np.sum((x + np.roll(x, -1, axis=1)) * cross, axis=1) / six_area
+            centroid[cells, 1] = np.sum((y + np.roll(y, -1, axis=1)) * cross, axis=1) / six_area
+    return area, centroid
 
 
-def _polygon_centroid(poly_verts: NDArray[np.float32], signed_area: float) -> NDArray[np.float32]:
-    """Centroid of a simple polygon. Falls back to vertex mean for degenerate cells."""
-    if abs(signed_area) < POLYGON_AREA_EPSILON:
-        # Degenerate (collinear) polygon — use arithmetic mean of vertices
-        return poly_verts.mean(axis=0).astype(np.float32)
-    x = poly_verts[:, 0].astype(np.float64)
-    y = poly_verts[:, 1].astype(np.float64)
-    x1 = np.roll(x, -1)
-    y1 = np.roll(y, -1)
-    cross = x * y1 - x1 * y
-    cx = float(np.sum((x + x1) * cross)) / (6.0 * signed_area)
-    cy = float(np.sum((y + y1) * cross)) / (6.0 * signed_area)
-    return np.array([cx, cy], dtype=np.float32)
+def _match_half_edges(
+    faces: NDArray[np.int32], face_offsets: NDArray[np.int32], n_verts: int
+) -> tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.int64]]:
+    """Pair up the cells' sides, numbering edges by the first side that reaches them.
+
+    Returns ``(first, second, next_slot)``. ``first`` and ``second`` hold each
+    edge's two sides as positions in ``faces``, ``second`` being -1 on a
+    boundary; a third side on one edge is ignored. ``next_slot`` gives the
+    position of the following vertex of each side's cell.
+    """
+    offsets = face_offsets.astype(np.int64)
+    next_slot = np.arange(1, faces.size + 1, dtype=np.int64)
+    next_slot[offsets[1:] - 1] = offsets[:-1]
+
+    va = faces.astype(np.int64)
+    vb = va[next_slot]
+    key = np.minimum(va, vb) * (n_verts + 1) + np.maximum(va, vb)
+    del va, vb
+    order = np.argsort(key, kind="stable")
+    key = key[order]
+    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
+    del key
+
+    first = order[starts]
+    has_second = np.diff(np.r_[starts, order.size]) >= 2
+    second = np.full(starts.size, -1, dtype=np.int64)
+    second[has_second] = order[starts[has_second] + 1]
+
+    by_first = np.argsort(first)
+    return first[by_first], second[by_first], next_slot
+
+
+def _edge_lengths_and_normals(
+    pa: NDArray[np.float64],
+    pb: NDArray[np.float64],
+    centroid: NDArray[np.float32],
+    cell_l: NDArray[np.int32],
+    cell_r: NDArray[np.int32],
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
+    """Edge length and unit normal, pointing from the left to the right cell."""
+    dx = pb[:, 0] - pa[:, 0]
+    dy = pb[:, 1] - pa[:, 1]
+    length = np.sqrt(dx * dx + dy * dy)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        nx = dy / length
+        ny = -dx / length
+    point = length < EDGE_LENGTH_EPSILON
+    nx[point] = 0.0
+    ny[point] = 0.0
+
+    interior = np.flatnonzero(cell_r != -1)
+    c = centroid.astype(np.float64)
+    c_l = c[cell_l[interior]]
+    between = c[cell_r[interior]] - c_l
+    inx, iny = nx[interior], ny[interior]
+    dot = between[:, 0] * inx + between[:, 1] * iny
+    flip = dot < 0
+    # Coincident centroids: fall back on the edge midpoint.
+    tied = np.flatnonzero(dot == 0.0)
+    if tied.size:
+        mid = 0.5 * (pa[interior[tied]] + pb[interior[tied]])
+        off = (mid[:, 0] - c_l[tied, 0]) * inx[tied] + (mid[:, 1] - c_l[tied, 1]) * iny[tied]
+        flip[tied] = off < 0
+    flipped = interior[flip]
+    nx[flipped] = -nx[flipped]
+    ny[flipped] = -ny[flipped]
+    return length.astype(np.float32), nx.astype(np.float32), ny.astype(np.float32)
+
+
+def _dense_from_csr(
+    values: NDArray[np.int32], ptr: NDArray[np.int32], max_degree: int
+) -> NDArray[np.int32]:
+    """``(N, max_degree)`` array of a CSR column, padded with -1."""
+    n = ptr.size - 1
+    rows = np.repeat(np.arange(n), np.diff(ptr))
+    columns = np.arange(values.size) - ptr[rows].astype(np.int64)
+    dense = np.full((n, max_degree), -1, dtype=np.int32)
+    dense[rows, columns] = values
+    return dense
 
 
 def edge_bed_steps(
@@ -193,9 +293,7 @@ def build_geometry(
     manning_n_from_file : (N,) float32, optional
         Per-cell Manning roughness. Values must be finite and positive.
     progress : bool, optional
-        Print coarse per-stage timing to stdout. The edge-enumeration and CSR
-        stages are Python loops over every cell and edge, so progress remains
-        visible for large production meshes.
+        Print coarse per-stage timing to stdout.
 
     Returns
     -------
@@ -276,20 +374,7 @@ def build_geometry(
 
         centroid = np.column_stack([cx, cy]).astype(np.float32)
     else:
-        # Fallback: mixed-degree mesh — per-cell Python loop
-        centroid = np.empty((n, 2), dtype=np.float32)
-        area = np.empty(n, dtype=np.float32)
-
-        for ci in range(n):
-            s, e = int(face_offsets[ci]), int(face_offsets[ci + 1])
-            cell_verts = verts[faces[s:e]]
-            sa = _shoelace_area(cell_verts)
-            if sa < 0:
-                faces[s:e] = faces[s:e][::-1]
-                sa = -sa
-                cell_verts = cell_verts[::-1]
-            area[ci] = np.float32(max(sa, 1e-30))
-            centroid[ci] = _polygon_centroid(cell_verts, sa)
+        area, centroid = _mixed_degree_cells(verts, faces, face_offsets, degrees)
     # A sliver below the CFL kernels' area floor gets no dt bound, so the first
     # drop of water in it divides by its area and the run ends in NaN. Refuse
     # the mesh instead.
@@ -328,71 +413,28 @@ def build_geometry(
             raise ValueError("manning_n must contain finite positive values")
     # ── Edge enumeration ──────────────────────────────────────────────────────
     _t_stage = time.perf_counter()
-    half_edge_map: dict[tuple[int, int], list[int]] = {}
-
-    for ci in range(n):
-        s, e = int(face_offsets[ci]), int(face_offsets[ci + 1])
-        d = e - s
-        cell_face = faces[s:e]
-        for local_side in range(d):
-            va = int(cell_face[local_side])
-            vb = int(cell_face[(local_side + 1) % d])
-            key = (min(va, vb), max(va, vb))
-            if key not in half_edge_map:
-                half_edge_map[key] = [ci, -1, local_side, -1, va, vb]
-            else:
-                entry = half_edge_map[key]
-                if entry[1] == -1:
-                    entry[1] = ci
-                    entry[3] = local_side
-
-    edge_records = list(half_edge_map.values())
-    E = len(edge_records)
-    _log(f"half-edge map built in {time.perf_counter() - _t_stage:.1f}s (E={E} edges)")
+    first, second, next_slot = _match_half_edges(faces, face_offsets, V)
+    E = first.size
+    _log(f"half-edges matched in {time.perf_counter() - _t_stage:.1f}s (E={E} edges)")
 
     _t_stage = time.perf_counter()
-    edge_cellL = np.empty(E, dtype=np.int32)
-    edge_cellR = np.empty(E, dtype=np.int32)
-    edge_sideL = np.empty(E, dtype=np.int32)
-    edge_sideR = np.empty(E, dtype=np.int32)
-    edge_len = np.empty(E, dtype=np.float32)
-    edge_nx = np.empty(E, dtype=np.float32)
-    edge_ny = np.empty(E, dtype=np.float32)
-
-    for eid, rec in enumerate(edge_records):
-        cL, cR, sL, sR, va_idx, vb_idx = rec
-        pa = verts[va_idx].astype(np.float64)
-        pb = verts[vb_idx].astype(np.float64)
-        dx = pb[0] - pa[0]
-        dy = pb[1] - pa[1]
-        length = float(np.sqrt(dx * dx + dy * dy))
-
-        if length < EDGE_LENGTH_EPSILON:
-            nx, ny = 0.0, 0.0
-        else:
-            nx = dy / length
-            ny = -dx / length
-
-        if cR != -1:
-            cL_c = centroid[cR].astype(np.float64) - centroid[cL].astype(np.float64)
-            dot = cL_c[0] * nx + cL_c[1] * ny
-            if dot < 0:
-                nx, ny = -nx, -ny
-            elif dot == 0.0:
-                mid = 0.5 * (pa + pb)
-                alt = (mid[0] - float(centroid[cL][0])) * nx + (
-                    mid[1] - float(centroid[cL][1])
-                ) * ny
-                if alt < 0:
-                    nx, ny = -nx, -ny
-
-        edge_cellL[eid] = cL
-        edge_cellR[eid] = cR
-        edge_sideL[eid] = sL
-        edge_sideR[eid] = sR
-        edge_len[eid] = np.float32(length)
-        edge_nx[eid] = np.float32(nx)
-        edge_ny[eid] = np.float32(ny)
+    slot_cell = np.repeat(np.arange(n, dtype=np.int32), degrees)
+    slot_side = (np.arange(faces.size) - face_offsets[slot_cell].astype(np.int64)).astype(np.int32)
+    interior = np.flatnonzero(second >= 0)
+    edge_cellL = slot_cell[first]
+    edge_cellR = np.full(E, -1, dtype=np.int32)
+    edge_cellR[interior] = slot_cell[second[interior]]
+    edge_sideL = slot_side[first]
+    edge_sideR = np.full(E, -1, dtype=np.int32)
+    edge_sideR[interior] = slot_side[second[interior]]
+    edge_len, edge_nx, edge_ny = _edge_lengths_and_normals(
+        verts[faces[first]].astype(np.float64),
+        verts[faces[next_slot[first]]].astype(np.float64),
+        centroid,
+        edge_cellL,
+        edge_cellR,
+    )
+    del first, second, next_slot, slot_cell, slot_side
 
     # Sanity: all interior normals point from L toward R  (>= 0 tolerates
     # degenerate cells with coincident centroids)
@@ -406,58 +448,34 @@ def build_geometry(
 
     # ── CSR adjacency (primary representation) ────────────────────────────────
     _t_stage = time.perf_counter()
-    cell_edge_lists: list[list[tuple[int, int, int]]] = [[] for _ in range(n)]
-    cell_nbr_lists: list[list[tuple[int, int]]] = [[] for _ in range(n)]
-
-    for eid in range(E):
-        cL = int(edge_cellL[eid])
-        cR = int(edge_cellR[eid])
-        sL = int(edge_sideL[eid])
-
-        cell_edge_lists[cL].append((sL, eid, 0))
-        cell_nbr_lists[cL].append((sL, cR))
-        if cR != -1:
-            sR = int(edge_sideR[eid])
-            cell_edge_lists[cR].append((sR, eid, 1))
-            cell_nbr_lists[cR].append((sR, cL))
-
-    # Sort by local side and flatten
-    cell_edge_ptr = np.zeros(n + 1, dtype=np.int32)
-    for ci in range(n):
-        cell_edge_lists[ci].sort(key=lambda x: x[0])
-        cell_nbr_lists[ci].sort(key=lambda x: x[0])
-        cell_edge_ptr[ci + 1] = cell_edge_ptr[ci] + len(cell_edge_lists[ci])
-
-    total_slots = int(cell_edge_ptr[n])
-    if total_slots >= 2**31 or np.any(np.diff(cell_edge_ptr.astype(np.int64)) < 0):
+    slot_cells = np.r_[edge_cellL, edge_cellR[interior]]
+    total_slots = slot_cells.size
+    if total_slots >= 2**31:
         # int32 CSR offsets overflow past this point; fail loudly instead of
         # wrapping cell_edge_ptr into a corrupt CSR.
         msg = f"mesh too large for int32 CSR offsets: total_slots={total_slots}"
         raise ValueError(msg)
-    cell_edge_idx = np.empty(total_slots, dtype=np.int32)
-    cell_nbr_idx = np.empty(total_slots, dtype=np.int32)
-    cell_edge_side = np.empty(total_slots, dtype=np.int32)
-
-    for ci in range(n):
-        s = int(cell_edge_ptr[ci])
-        for j, (_, eid, is_right) in enumerate(cell_edge_lists[ci]):
-            cell_edge_idx[s + j] = eid
-            cell_edge_side[s + j] = is_right
-        for j, (_, nbr) in enumerate(cell_nbr_lists[ci]):
-            cell_nbr_idx[s + j] = nbr
+    # Within a cell, in the order of its sides: the per-cell gather order.
+    slot_sides = np.r_[edge_sideL, edge_sideR[interior]]
+    order = np.argsort(slot_cells.astype(np.int64) * max_degree + slot_sides)
+    del slot_sides
+    cell_edge_ptr = np.zeros(n + 1, dtype=np.int32)
+    np.cumsum(np.bincount(slot_cells, minlength=n), out=cell_edge_ptr[1:])
+    del slot_cells
+    cell_edge_idx = np.r_[np.arange(E, dtype=np.int32), interior.astype(np.int32)][order]
+    cell_nbr_idx = np.r_[edge_cellR, edge_cellL[interior]][order]
+    cell_edge_side = np.r_[np.zeros(E, dtype=np.int32), np.ones(interior.size, dtype=np.int32)][
+        order
+    ]
+    del order
 
     cell_edge_idx_signed = (cell_edge_idx.astype(np.int32) << 1) | cell_edge_side
 
     # ── Dense arrays (padded to max_degree, backward compat) ──────────────────
     _log(f"CSR adjacency built in {time.perf_counter() - _t_stage:.1f}s (max_degree={max_degree})")
     _t_stage = time.perf_counter()
-    cell_edges = np.full((n, max_degree), -1, dtype=np.int32)
-    cell_neighbors = np.full((n, max_degree), -1, dtype=np.int32)
-    for ci in range(n):
-        s, e = int(cell_edge_ptr[ci]), int(cell_edge_ptr[ci + 1])
-        d = e - s
-        cell_edges[ci, :d] = cell_edge_idx[s:e]
-        cell_neighbors[ci, :d] = cell_nbr_idx[s:e]
+    cell_edges = _dense_from_csr(cell_edge_idx, cell_edge_ptr, max_degree)
+    cell_neighbors = _dense_from_csr(cell_nbr_idx, cell_edge_ptr, max_degree)
     _log(f"dense arrays built in {time.perf_counter() - _t_stage:.1f}s — build_geometry done")
 
     return MeshGeometry(
@@ -491,12 +509,43 @@ def build_geometry(
     )
 
 
+def hilbert_distances(
+    x: NDArray[np.int64], y: NDArray[np.int64], hilbert_p: int
+) -> NDArray[np.int64]:
+    """Distance along a Hilbert curve of order ``hilbert_p`` for each ``(x, y)``.
+
+    Skilling's transform, the same curve as ``hilbertcurve.HilbertCurve(p, 2)``.
+    """
+    x, y = x.astype(np.int64), y.astype(np.int64)
+    top = 1 << (hilbert_p - 1)
+
+    q = top
+    while q > 1:
+        low = q - 1
+        x = np.where(x & q, x ^ low, x)
+        y_set = (y & q) != 0
+        swap = (x ^ y) & low
+        x, y = np.where(y_set, x ^ low, x ^ swap), np.where(y_set, y, y ^ swap)
+        q >>= 1
+
+    y = y ^ x
+    gray = np.zeros_like(y)
+    q = top
+    while q > 1:
+        gray ^= np.where(y & q, q - 1, 0)
+        q >>= 1
+    x, y = x ^ gray, y ^ gray
+
+    distance = np.zeros_like(x)
+    for bit in range(hilbert_p):
+        distance |= ((x >> bit) & 1) << (2 * bit + 1)
+        distance |= ((y >> bit) & 1) << (2 * bit)
+    return distance
+
+
 def hilbert_permutation(centroid: NDArray[np.float32], hilbert_p: int = 10) -> NDArray[np.int32]:
     """Return ``perm[new_i] = old_i`` sorted by Hilbert-curve distance."""
-    n_cells = centroid.shape[0]
     grid_size = 2**hilbert_p - 1
-
-    hc = HilbertCurve(p=hilbert_p, n=2)
 
     cx = centroid[:, 0].astype(np.float64)
     cy = centroid[:, 1].astype(np.float64)
@@ -504,11 +553,21 @@ def hilbert_permutation(centroid: NDArray[np.float32], hilbert_p: int = 10) -> N
     c_span = np.array([cx.max() - cx.min(), cy.max() - cy.min()])
     c_span[c_span == 0] = 1.0
 
-    cx_int = ((cx - c_min[0]) / c_span[0] * grid_size).astype(int)
-    cy_int = ((cy - c_min[1]) / c_span[1] * grid_size).astype(int)
-    points_2d = [[int(cx_int[i]), int(cy_int[i])] for i in range(n_cells)]
-    hilbert_d = np.array(hc.distances_from_points(points_2d), dtype=np.int64)
-    return np.argsort(hilbert_d, kind="stable").astype(np.int32)
+    cx_int = ((cx - c_min[0]) / c_span[0] * grid_size).astype(np.int64)
+    cy_int = ((cy - c_min[1]) / c_span[1] * grid_size).astype(np.int64)
+    distance = hilbert_distances(cx_int, cy_int, hilbert_p)
+    return np.argsort(distance, kind="stable").astype(np.int32)
+
+
+def _reordered_slots(
+    ptr: NDArray[np.int32], perm: NDArray[np.int32]
+) -> tuple[NDArray[np.int32], NDArray[np.int64]]:
+    """New row pointers of a CSR column after ``perm``, and the old slot of each new one."""
+    degrees = np.diff(ptr)[perm]
+    new_ptr = np.zeros(ptr.size, dtype=np.int32)
+    np.cumsum(degrees, out=new_ptr[1:])
+    shift = ptr[perm].astype(np.int64) - new_ptr[:-1]
+    return new_ptr, np.repeat(shift, degrees) + np.arange(int(new_ptr[-1]))
 
 
 def hilbert_reorder(
@@ -558,16 +617,9 @@ def hilbert_reorder(
     manning_n = None if geom.manning_n is None else geom.manning_n[perm]
     cell_bbox = geom.cell_bbox[perm]
 
-    old_vertex_degrees = np.diff(geom.cell_vertex_ptr)
-    new_vertex_ptr = np.zeros(N + 1, dtype=np.int32)
-    np.cumsum(old_vertex_degrees[perm], out=new_vertex_ptr[1:])
-    cell_vertices = np.empty_like(geom.cell_vertices)
-    for new_i in range(N):
-        old_i = int(perm[new_i])
-        old_s = int(geom.cell_vertex_ptr[old_i])
-        old_e = int(geom.cell_vertex_ptr[old_i + 1])
-        new_s = int(new_vertex_ptr[new_i])
-        cell_vertices[new_s : new_s + old_e - old_s] = geom.cell_vertices[old_s:old_e]
+    new_vertex_ptr, vertex_slots = _reordered_slots(geom.cell_vertex_ptr, perm)
+    cell_vertices = geom.cell_vertices[vertex_slots]
+    del vertex_slots
 
     # Re-index edge cell references
     edge_cellL_new = inv_perm[geom.edge_cellL].astype(np.int32)
@@ -576,42 +628,19 @@ def hilbert_reorder(
     edge_cellR_new[bdy] = inv_perm[geom.edge_cellR[bdy]]
 
     # Rebuild CSR in new order
-    old_degrees = np.diff(geom.cell_edge_ptr)
-    new_degrees = old_degrees[perm]
-    cell_edge_ptr_new = np.zeros(N + 1, dtype=np.int32)
-    np.cumsum(new_degrees, out=cell_edge_ptr_new[1:])
-
-    total_slots = int(cell_edge_ptr_new[N])
-    cell_edge_idx_new = np.empty(total_slots, dtype=np.int32)
-    cell_nbr_idx_new = np.empty(total_slots, dtype=np.int32)
-    cell_edge_side_new = np.empty(total_slots, dtype=np.int32)
-
-    for new_i in range(N):
-        old_i = int(perm[new_i])
-        old_s = int(geom.cell_edge_ptr[old_i])
-        old_e = int(geom.cell_edge_ptr[old_i + 1])
-        new_s = int(cell_edge_ptr_new[new_i])
-        d = old_e - old_s
-
-        cell_edge_idx_new[new_s : new_s + d] = geom.cell_edge_idx[old_s:old_e]
-        # is_right is a property of the (cell, edge) pair at this CSR slot,
-        # independent of cell/edge renumbering — carry it through unchanged.
-        cell_edge_side_new[new_s : new_s + d] = geom.cell_edge_side[old_s:old_e]
-
-        old_nbrs = geom.cell_nbr_idx[old_s:old_e]
-        new_nbrs = np.where(old_nbrs == -1, -1, inv_perm[old_nbrs])
-        cell_nbr_idx_new[new_s : new_s + d] = new_nbrs
+    cell_edge_ptr_new, edge_slots = _reordered_slots(geom.cell_edge_ptr, perm)
+    cell_edge_idx_new = geom.cell_edge_idx[edge_slots]
+    # is_right is a property of the (cell, edge) pair at this CSR slot,
+    # independent of cell/edge renumbering — carry it through unchanged.
+    cell_edge_side_new = geom.cell_edge_side[edge_slots]
+    old_nbrs = geom.cell_nbr_idx[edge_slots]
+    cell_nbr_idx_new = np.where(old_nbrs == -1, -1, inv_perm[old_nbrs])
+    del edge_slots, old_nbrs
 
     # Dense arrays (padded)
     max_degree = geom.max_degree
-    cell_edges_new = np.full((N, max_degree), -1, dtype=np.int32)
-    cell_neighbors_new = np.full((N, max_degree), -1, dtype=np.int32)
-    for ci in range(N):
-        s = int(cell_edge_ptr_new[ci])
-        e = int(cell_edge_ptr_new[ci + 1])
-        d = e - s
-        cell_edges_new[ci, :d] = cell_edge_idx_new[s:e]
-        cell_neighbors_new[ci, :d] = cell_nbr_idx_new[s:e]
+    cell_edges_new = _dense_from_csr(cell_edge_idx_new, cell_edge_ptr_new, max_degree)
+    cell_neighbors_new = _dense_from_csr(cell_nbr_idx_new, cell_edge_ptr_new, max_degree)
 
     # Verify normal orientation (>= 0 tolerates degenerate zero-area cells)
     imask = edge_cellR_new != -1

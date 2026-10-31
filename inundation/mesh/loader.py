@@ -11,10 +11,15 @@ Usage
     )
 """
 
+from typing import Any
+
 import numpy as np
 from numpy.typing import NDArray
 
 from ..tuning import MIN_POLYGON_VERTICES
+
+# shapely.GeometryType.POLYGON
+_POLYGON_TYPE_ID = 3
 
 
 def _load_optional_manning_n(values: object) -> NDArray[np.float32]:
@@ -26,6 +31,51 @@ def _load_optional_manning_n(values: object) -> NDArray[np.float32]:
     if not np.isfinite(manning_n).all() or not (manning_n > 0.0).all():
         raise ValueError("manning_n must contain finite positive values")
     return manning_n
+
+
+def _weld_polygons(
+    geoms: NDArray[Any],
+) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
+    """Vertices and flat faces of polygons, numbering vertices as they are first met.
+
+    Vertices weld on their exact float64 coordinates. Interior rings are ignored.
+    """
+    import shapely
+
+    wrong_type = np.flatnonzero(shapely.get_type_id(geoms) != _POLYGON_TYPE_ID)
+    if wrong_type.size:
+        raise ValueError(
+            f"{wrong_type.size} geometries are not polygons (first: row {int(wrong_type[0])})"
+        )
+    ring_xy, ring_of = shapely.get_coordinates(shapely.get_exterior_ring(geoms), return_index=True)
+    # A closed ring repeats its first point last.
+    n_cells = geoms.size
+    degrees = np.maximum(np.bincount(ring_of, minlength=n_cells) - 1, 0)
+    short = np.flatnonzero(degrees < MIN_POLYGON_VERTICES)
+    if short.size:
+        raise ValueError(f"Geometry has {degrees[short[0]]} vertices — need at least 3.")
+    total = int(degrees.sum())
+    if total >= 2**31:
+        raise ValueError(f"mesh too large for int32 face offsets: {total} polygon vertices")
+    offsets = np.zeros(n_cells + 1, dtype=np.int32)
+    np.cumsum(degrees, out=offsets[1:])
+    keep = np.ones(ring_xy.shape[0], dtype=bool)
+    keep[offsets[1:].astype(np.int64) + np.arange(n_cells)] = False
+    xy = ring_xy[keep]
+    del ring_xy, ring_of, keep
+
+    # lexsort is stable, so each run of equal points starts at its first use.
+    order = np.lexsort((xy[:, 1], xy[:, 0]))
+    ordered = xy[order]
+    new_point = np.r_[True, (ordered[1:] != ordered[:-1]).any(axis=1)]
+    del ordered
+    first_use = order[new_point]
+    id_by_first_use = np.empty(first_use.size, dtype=np.int32)
+    by_use = np.argsort(first_use)
+    id_by_first_use[by_use] = np.arange(first_use.size, dtype=np.int32)
+    faces = np.empty(total, dtype=np.int32)
+    faces[order] = id_by_first_use[np.cumsum(new_point) - 1]
+    return xy[first_use[by_use]].astype(np.float32), faces, offsets
 
 
 def load_mesh_file(
@@ -70,36 +120,19 @@ def load_mesh_file(
         # binary column, so reading it with pyarrow and decoding via
         # shapely.from_wkb works uniformly for both.
         import pyarrow.parquet as pq
-        from shapely import from_wkb
+        from shapely import from_wkb, is_missing
 
         table = pq.read_table(path)
         geometry_wkb = table.column("geometry").to_numpy(zero_copy_only=False)
         geoms = from_wkb(geometry_wkb)
-        not_null = np.array([g is not None for g in geoms], dtype=bool)
+        not_null = ~is_missing(geoms)
 
-        coord_map: dict[tuple[float, float], int] = {}
-        all_coords: list[tuple[float, float]] = []
-        faces_list: list[list[int]] = []
-        for geom in geoms:
-            if geom is None:
-                continue
-            coords = list(geom.exterior.coords)[:-1]
-            if len(coords) < MIN_POLYGON_VERTICES:
-                raise ValueError(f"Geometry has {len(coords)} vertices — need at least 3.")
-            face_idx = []
-            for xy in coords:
-                key = (float(xy[0]), float(xy[1]))
-                if key not in coord_map:
-                    coord_map[key] = len(all_coords)
-                    all_coords.append(key)
-                face_idx.append(coord_map[key])
-            faces_list.append(face_idx)
-
-        if not faces_list:
+        if not not_null.any():
             raise ValueError(
                 f"Mesh file '{path}' contains no valid polygon geometries "
                 f"({table.num_rows} rows, {int(not_null.sum())} non-null geometries)."
             )
+        verts, faces_flat, offsets = _weld_polygons(geoms[not_null])
         if "z_mean" not in table.column_names:
             raise ValueError(f"Mesh file '{path}' is missing required 'z_mean' bed elevations")
         zb_vals = table.column("z_mean").to_numpy(zero_copy_only=False)[not_null].astype(np.float32)
@@ -113,46 +146,23 @@ def load_mesh_file(
             else None
         )
 
-        verts = np.array(all_coords, dtype=np.float32)
-        faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
-        offsets = np.zeros(len(faces_list) + 1, dtype=np.int32)
-        for i, f in enumerate(faces_list):
-            offsets[i + 1] = offsets[i] + len(f)
-
         return verts, faces_flat, offsets, zb_vals, manning_n_vals
 
     if ext in (".gpkg", ".shp"):
         import geopandas as gpd
 
         gdf = gpd.read_file(path)
-        coord_map = {}
-        all_coords = []
-        faces_list = []
-        for geom in gdf.geometry:
-            if geom is None:
-                continue
-            coords = list(geom.exterior.coords)[:-1]
-            if len(coords) < MIN_POLYGON_VERTICES:
-                raise ValueError(f"Geometry has {len(coords)} vertices — need at least 3.")
-            face_idx = []
-            for xy in coords:
-                key = (float(xy[0]), float(xy[1]))
-                if key not in coord_map:
-                    coord_map[key] = len(all_coords)
-                    all_coords.append(key)
-                face_idx.append(coord_map[key])
-            faces_list.append(face_idx)
-
-        if not faces_list:
+        valid_geometry = gdf.geometry.notna()
+        if not valid_geometry.any():
             n_rows = len(gdf)
-            n_valid = gdf.geometry.notna().sum()
+            n_valid = valid_geometry.sum()
             raise ValueError(
                 f"Mesh file '{path}' contains no valid polygon geometries "
                 f"({n_rows} rows, {n_valid} non-null geometries)."
             )
+        verts, faces_flat, offsets = _weld_polygons(np.asarray(gdf.geometry[valid_geometry]))
         if "z_mean" not in gdf.columns:
             raise ValueError(f"Mesh file '{path}' is missing required 'z_mean' bed elevations")
-        valid_geometry = gdf.geometry.notna()
         zb_vals = gdf.loc[valid_geometry, "z_mean"].to_numpy(dtype=np.float32)
         if not np.isfinite(zb_vals).all():
             raise ValueError(f"Mesh file '{path}' contains non-finite 'z_mean' elevations")
@@ -161,12 +171,6 @@ def load_mesh_file(
             if "manning_n" in gdf.columns
             else None
         )
-
-        verts = np.array(all_coords, dtype=np.float32)
-        faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
-        offsets = np.zeros(len(faces_list) + 1, dtype=np.int32)
-        for i, f in enumerate(faces_list):
-            offsets[i + 1] = offsets[i] + len(f)
 
         return verts, faces_flat, offsets, zb_vals, manning_n_vals
 

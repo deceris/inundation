@@ -236,3 +236,12 @@ signature check, because most backends accept the flag and ignore it. Benches
 ask only where it is supported, so they keep working on the barrier backend.
 Evidence:
 [`26-momentum-snapshots/`](../implementation/26-momentum-snapshots/results.md).
+
+## Mesh build stays bit-identical
+
+The numpy mesh build reproduces the Python one exactly, so
+`GEOMETRY_CACHE_VERSION` stays at 5 and no new baseline is needed. The one
+exception to doing the simplest thing is that cells are summed per degree rather
+than with `np.bincount`, whose rounding differs. The old build stays in the tests
+as the oracle. `hilbertcurve` is now only used by tests. Evidence:
+[`27-fast-mesh-build/`](../implementation/27-fast-mesh-build/results.md).
