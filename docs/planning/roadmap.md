@@ -22,6 +22,12 @@ away, and the compensated depth pair keeps them
    Heun: the scheme is first order in space with a second-order integrator.
 3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
+## After open boundaries
+
+Two-way basin coupling follows
+[effort 29](../implementation/29-open-boundaries/plan.md): basins in lockstep that pass
+stage back upstream, so backwater can cross a cut. Effort 29 builds the one-way exchange.
+
 ## Invariants
 
 - Repeated runs remain deterministic within each benchmark's stated tolerance.

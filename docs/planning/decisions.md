@@ -257,3 +257,13 @@ Real-world coordinates stay at the edge: `PointSource` takes them, and benches r
 bit on values that no longer feed the solver. The change sets a new baseline for
 real meshes and leaves meshes at zero untouched. Evidence:
 [`28-coordinate-origin/`](../implementation/28-coordinate-origin/results.md).
+
+## Open boundaries: one-way exchange first, no stretch-wide rating curve
+
+Basins exchange water one way in effort 29, upstream first, with measured outflow becoming
+the next basin's inflow. Volume passes exactly and the meshes need not match along a cut.
+Backwater cannot cross a cut until the two-way effort that follows. A stretch-wide
+`Q(stage)` rating curve is left out, because `NormalDepth` covers the common outlet and the
+full curve needs a new reduction on the device. Stretches are lines in the run config, so
+nothing waits on the mesher. Design:
+[`29-open-boundaries/`](../implementation/29-open-boundaries/plan.md).

@@ -26,3 +26,4 @@
 - [`26-momentum-snapshots/`](implementation/26-momentum-snapshots/)
 - [`27-fast-mesh-build/`](implementation/27-fast-mesh-build/)
 - [`28-coordinate-origin/`](implementation/28-coordinate-origin/)
+- [`29-open-boundaries/`](implementation/29-open-boundaries/)
