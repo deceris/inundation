@@ -130,3 +130,7 @@ def test_render_html_inlines_graphs_before_animations(tmp_path: Path) -> None:
 
 def test_the_wetting_and_drying_case_is_a_gate() -> None:
     assert "parabolic_bowl" in {spec.name for spec in SUITES}
+
+
+def test_open_boundaries_are_a_gate() -> None:
+    assert "open_boundary" in {spec.name for spec in SUITES}

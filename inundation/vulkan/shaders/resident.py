@@ -27,6 +27,12 @@ block that is not ``active``. Edges are sorted by the block of their left cell
 and binding 21 holds each edge workgroup's first and last block. See
 ``docs/implementation/22-active-set/plan.md`` for the argument.
 
+Open boundaries: ``ecR[e] == -1`` is a wall and ``ecR[e] == -2 - k`` is open edge
+``k``, whose condition is in binding 19 of the kernels that build its ghost state.
+An open edge always writes its gather words, so an update can read it without
+repeating the flux's dry test. ``TALLY_RESIDENT_GLSL`` measures the volume through
+each stretch. See ``docs/implementation/29-open-boundaries/plan.md``.
+
 Accumulation: the ``*_GATHER_GLSL`` kernels replace the float ``atomicAdd`` of
 fluxes and CFL terms with per-edge writes and a fixed-order per-cell sum, so
 repeated runs are bit-identical. The remaining atomics (``atomicMin`` for dt,
@@ -60,16 +66,19 @@ layout(set=0, binding=17) buffer DTBUF  { uint  dt_buf_u[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
 """
 
-# Active-set bindings; binding 19 stays per-kernel (clamp mass, source list).
+# Active-set bindings; binding 19 stays per-kernel (clamp mass, source list,
+# open-edge conditions). BLK_FORCED is set by the host for a block an open edge
+# can wet from outside: it counts as wet however dry the block is.
 _ACTIVE_BINDINGS = """\
 layout(set=0, binding=20) buffer BLKF   { uint blk[];    };
 layout(set=0, binding=21) buffer ERANGE { uint erange[]; };
 layout(set=0, binding=22) buffer BPTR   { uint bptr[];   };
 layout(set=0, binding=23) buffer BIDX   { uint bidx[];   };
 
-const uint BLK_WORDS = 2u;
+const uint BLK_WORDS = 3u;
 const uint BLK_WET = 0u;
 const uint BLK_ACTIVE = 1u;
+const uint BLK_FORCED = 2u;
 
 bool block_active(uint b) { return blk[BLK_WORDS * b + BLK_ACTIVE] != 0u; }
 uint block_of(uint cell) { return cell >> 8; }
@@ -91,6 +100,138 @@ layout(set=0, binding=27) buffer TOUCH  { uint  touched[]; };
 // differ by the hydrostatic correction); corrector CFL wave-speed term.
 const uint EF_WORDS = 6u;
 const uint EF_CFL = 5u;
+"""
+
+# Open edges: the ghost state beyond edge ``-2 - cR`` and its mass flux. A
+# boundary edge's bed steps are zero, so the ghost needs no reconstruction. Words
+# per edge: condition, then its value (see the docstring of ``open_ghost``).
+_OPEN_BINDINGS = """\
+layout(set=0, binding=19) buffer OPEN   { uint open_u[]; };
+"""
+
+_OPEN_GHOST_GLSL = """\
+const uint OPEN_WORDS = 2u;
+const uint OPEN_WALL = 0u;
+const uint OPEN_FREE = 1u;
+const uint OPEN_NORMAL = 2u;
+const uint OPEN_STAGE = 3u;
+const uint OPEN_INFLOW = 4u;
+const uint OPEN_NEWTON_STEPS = 4u;
+
+uint open_kind(int cR) { return open_u[OPEN_WORDS * uint(-2 - cR)]; }
+float open_value(int cR) { return uintBitsToFloat(open_u[OPEN_WORDS * uint(-2 - cR) + 1u]); }
+
+// Inflow keeps its edge live while dry, or its volume would be lost.
+bool open_forced(int cR) { return cR < -1 && open_kind(cR) == OPEN_INFLOW && open_value(cR) > 0.0; }
+
+// Depth beyond an inflow edge of discharge q per unit width: the root of
+// -q/hG + 2 sqrt(g hG) = unL + 2 cL, the outgoing characteristic. Solved in
+// s = sqrt(hG), where the left side rises and is concave, so Newton from below
+// climbs to the root without passing it; a start above it is halved at worst.
+float inflow_depth(float q, float riemann) {
+    float root_g = sqrt(pc.g);
+    float s = max(pow(q / (2.0 * root_g), 1.0 / 3.0), riemann / (2.0 * root_g));
+    for (uint k = 0u; k < OPEN_NEWTON_STEPS; ++k) {
+        float f  = 2.0 * root_g * s - q / (s * s) - riemann;
+        float df = 2.0 * root_g + 2.0 * q / (s * s * s);
+        s = max(s - f / df, 0.5 * s);
+    }
+    return s * s;
+}
+
+// The state beyond an open edge, from the cell inside it. The value word is
+// sqrt(S)/n for OPEN_NORMAL, the depth over this cell's bed for OPEN_STAGE and
+// the discharge per unit width for OPEN_INFLOW.
+void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
+                out float hG, out float huG, out float hvG)
+{
+    uint kind = open_kind(cR);
+    float value = open_value(cR);
+    float uL = safe_vel(hL, huL);
+    float vL = safe_vel(hL, hvL);
+    float unL = uL * nx_ + vL * ny_;
+    float ut = -uL * ny_ + vL * nx_;
+    float cL = sqrt(pc.g * max(hL, 0.0));
+    float un = -unL;
+    hG = hL;
+    if (kind == OPEN_FREE) {
+        un = abs(unL);
+    } else if (kind == OPEN_NORMAL) {
+        un = value * pow(max(hL, 0.0), 2.0 / 3.0);
+    } else if (kind == OPEN_STAGE) {
+        // A level cannot reach a boundary against supercritical outflow.
+        if (hL < pc.dry_tol || unL < cL) {
+            hG = value;
+            un = unL + 2.0 * (cL - sqrt(pc.g * value));
+        } else {
+            un = unL;
+        }
+    } else if (kind == OPEN_INFLOW && value > 0.0) {
+        hG = inflow_depth(value, unL + 2.0 * cL);
+        un = -value / hG;
+        ut = 0.0;
+    }
+    huG = hG * (un * nx_ - ut * ny_);
+    hvG = hG * (un * ny_ + ut * nx_);
+}
+
+// Mass flux through a boundary edge: a wall passes none, as FLUX_GLSL explains;
+// outflow conditions never draw water in; inflow carries exactly its discharge.
+float boundary_mass_flux(int cR, float Fh) {
+    if (cR == -1) { return 0.0; }
+    uint kind = open_kind(cR);
+    if (kind == OPEN_FREE || kind == OPEN_NORMAL) { return max(Fh, 0.0); }
+    if (kind == OPEN_STAGE) { return Fh; }
+    if (kind == OPEN_INFLOW) { return -open_value(cR); }
+    return 0.0;
+}
+"""
+
+_FLUX_GHOST_ATOMIC = """\
+    if (cR < 0) {
+        hR  = hL;
+        huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
+        hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
+    } else {
+        load_state(cR, hR, huR, hvR);
+    }
+
+    // Fully dry edges carry no flux and, below dry_tol, no CFL constraint that
+    // could bind: a cell whose edges are all dry gets no dt estimate at all.
+    // The gather update applies the same test and skips them.
+    if (hL < pc.dry_tol && hR < pc.dry_tol) return;
+"""
+
+_FLUX_GHOST_GATHER = """\
+    if (cR == -1) {
+        hR  = hL;
+        huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
+        hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
+    } else if (cR < 0) {
+        open_ghost(cR, hL, huL, hvL, nx_, ny_, hR, huR, hvR);
+    } else {
+        load_state(cR, hR, huR, hvR);
+    }
+
+    // Fully dry edges carry no flux and, below dry_tol, no CFL constraint that
+    // could bind: a cell whose edges are all dry gets no dt estimate at all.
+    // The gather update applies the same test and skips them, except on an
+    // open edge, which clears its words here instead.
+    if (hL < pc.dry_tol && hR < pc.dry_tol && !open_forced(cR)) {
+        if (cR < -1) {
+            for (uint w = 0u; w < EF_WORDS; ++w) { ef[EF_WORDS * eid + w] = 0.0; }
+        }
+        return;
+    }
+"""
+
+_FLUX_MASS_ATOMIC = """\
+    // A wall passes no mass (see FLUX_GLSL).
+    if (cR < 0) { Fh = 0.0; }
+"""
+
+_FLUX_MASS_GATHER = """\
+    if (cR < 0) { Fh = boundary_mass_flux(cR, Fh); }
 """
 
 _FLUX_ACCUM_ATOMIC = """\
@@ -134,7 +275,7 @@ def _flux_resident(gather: bool) -> str:
         + "\nlayout(local_size_x = 256) in;\n\n"
         + _BINDINGS
         + _ACTIVE_BINDINGS
-        + (_GATHER_BINDINGS if gather else "")
+        + (_GATHER_BINDINGS + _OPEN_BINDINGS if gather else "")
         + """
 layout(push_constant) uniform PC {
     uint  num_edges;
@@ -147,6 +288,7 @@ layout(push_constant) uniform PC {
 
 """
         + HLLC_GLSL
+        + (_OPEN_GHOST_GLSL if gather else "")
         + """\
 // The corrector reads the predictor state, except in an inactive block: its
 // predictor state was not computed this step and is stale, and the full step
@@ -190,19 +332,9 @@ void main() {
     load_state(cL, hL, huL, hvL);
 
     float hR, huR, hvR;
-    if (cR < 0) {
-        hR  = hL;
-        huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
-        hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
-    } else {
-        load_state(cR, hR, huR, hvR);
-    }
-
-    // Fully dry edges carry no flux and, below dry_tol, no CFL constraint that
-    // could bind: a cell whose edges are all dry gets no dt estimate at all.
-    // The gather update applies the same test and skips them.
-    if (hL < pc.dry_tol && hR < pc.dry_tol) return;
-
+"""
+        + (_FLUX_GHOST_GATHER if gather else _FLUX_GHOST_ATOMIC)
+        + """
     float dzL = edz[2u * eid];
     float dzR = edz[2u * eid + 1u];
     float hLs, hqnL, hqtL, hRs, hqnR, hqtR;
@@ -211,9 +343,9 @@ void main() {
 
     float Fh, Fhn, Fht, Smax;
     hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
-    // A wall passes no mass (see FLUX_GLSL).
-    if (cR < 0) { Fh = 0.0; }
-
+"""
+        + (_FLUX_MASS_GATHER if gather else _FLUX_MASS_ATOMIC)
+        + """
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
 
@@ -275,9 +407,11 @@ _UPDATE_SUM_GATHER = """\
         bool right = (s & 1u) != 0u;
         if (own_dry) {
             int nb = right ? ecL[e] : ecR[e];
-            if (nb < 0) continue;  // a wall mirrors this dry cell
-            bool pred = pc.stage > 0.5 && block_active(block_of(uint(nb)));
-            if ((pred ? h1[nb] : h[nb]) < pc.dry_tol) continue;
+            if (nb == -1) continue;  // a wall mirrors this dry cell
+            if (nb >= 0) {
+                bool pred = pc.stage > 0.5 && block_active(block_of(uint(nb)));
+                if ((pred ? h1[nb] : h[nb]) < pc.dry_tol) continue;
+            }
         }
         uint o = EF_WORDS * e;
         if (right) {
@@ -515,6 +649,7 @@ layout(local_size_x = 256) in;
     + _BINDINGS
     + _ACTIVE_BINDINGS
     + _GATHER_BINDINGS
+    + _OPEN_BINDINGS
     + """\
 layout(push_constant) uniform PC {
     uint  num_edges;
@@ -524,6 +659,7 @@ layout(push_constant) uniform PC {
 
 """
     + HLLC_GLSL
+    + _OPEN_GHOST_GLSL
     + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
@@ -535,10 +671,12 @@ void main() {
 
     float hL = h[cL], huL = hu[cL], hvL = hv[cL];
     float hR, huR, hvR;
-    if (cR < 0) {
+    if (cR == -1) {
         hR  = hL;
         huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
         hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
+    } else if (cR < 0) {
+        open_ghost(cR, hL, huL, hvL, nx_, ny_, hR, huR, hvR);
     } else {
         hR = h[cR]; huR = hu[cR]; hvR = hv[cR];
     }
@@ -579,6 +717,54 @@ void main() {
     }
     if (lam > 1e-30 && area[i] > 1e-10) {
         atomicMin(dt_buf_u[0], floatBitsToUint(pc.cfl_number * area[i] / lam));
+    }
+}
+
+"""
+)
+
+
+# Volume through each stretch after one flux stage, as an exact pair of float32
+# words per direction: out (hi, lo), in (hi, lo). A corrector-averaged step moves
+# dt/2 of each stage's flux. One invocation per stretch sums its edges in a fixed
+# order. An inactive block's words are stale, and its cells did not update either.
+TALLY_RESIDENT_GLSL = (
+    """\
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(set=0, binding=0) buffer DTBUF { uint  dt_buf_u[]; };
+layout(set=0, binding=1) buffer EFLUX { float ef[];       };
+layout(set=0, binding=2) buffer ECL   { int   ecL[];      };
+layout(set=0, binding=3) buffer BLKF  { uint  blk[];      };
+layout(set=0, binding=4) buffer SPTR  { uint  stretch_ptr[];  };
+layout(set=0, binding=5) buffer SEDGE { uint  stretch_edge[]; };
+layout(set=0, binding=6) buffer TALLY { float tally[];    };
+
+const uint BLK_WORDS = 3u;
+const uint BLK_ACTIVE = 1u;
+const uint EF_WORDS = 6u;
+
+"""
+    + _EFT_GLSL
+    + """
+void main() {
+    uint stretch = gl_GlobalInvocationID.x;
+    if (dt_buf_u[0] == 0u) return;
+    float half_dt = 0.5 * uintBitsToFloat(dt_buf_u[0]);
+    for (uint k = stretch_ptr[stretch]; k < stretch_ptr[stretch + 1u]; ++k) {
+        uint e = stretch_edge[k];
+        uint cell = uint(ecL[e]);
+        if (blk[BLK_WORDS * (cell >> 8) + BLK_ACTIVE] == 0u) continue;
+        float v = half_dt * ef[EF_WORDS * e];
+        uint o = 4u * stretch + ((v < 0.0) ? 2u : 0u);
+        float s, err, hi, lo;
+        two_sum(tally[o], abs(v), s, err);
+        err += tally[o + 1u];
+        two_sum(s, err, hi, lo);
+        tally[o] = hi;
+        tally[o + 1u] = lo;
     }
 }
 
@@ -722,9 +908,9 @@ void main() {
     uint b = gl_GlobalInvocationID.x;
     if (b >= pc.num_blocks) return;
     if (pc.force < 0.5 && dt_buf_u[0] == 0u) return;
-    uint v = blk[BLK_WORDS * b + BLK_WET];
+    uint v = blk[BLK_WORDS * b + BLK_WET] | blk[BLK_WORDS * b + BLK_FORCED];
     for (uint k = bptr[b]; v == 0u && k < bptr[b + 1u]; ++k) {
-        v = blk[BLK_WORDS * bidx[k] + BLK_WET];
+        v = blk[BLK_WORDS * bidx[k] + BLK_WET] | blk[BLK_WORDS * bidx[k] + BLK_FORCED];
     }
     blk[BLK_WORDS * b + BLK_ACTIVE] = v;
 }

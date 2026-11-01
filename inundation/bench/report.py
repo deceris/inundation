@@ -1,7 +1,7 @@
 """Run the full benchmark suite (+ unit tests) and emit a standalone HTML report.
 
 Each gated harness (`dambreak`, `radial_dambreak`, `floodplain_depressions`,
-`momentum_obstruction`, `flood_propagation`) is run as a subprocess through its
+`momentum_obstruction`, `flood_propagation`, `open_boundary`) is run as a subprocess through its
 own CLI with GIF rendering enabled, so the metrics and animations are exactly
 the ones the harness itself produces — no reimplementation. The per-suite
 ``summary.json`` files, console logs and GIF animations are then folded into a
@@ -133,6 +133,21 @@ SUITES: tuple[SuiteSpec, ...] = (
             "surface, so the shoreline moves across cells every period.\n"
             "Forcing and runtime: none, three periods.\n"
             "Validation: depth error, thin-film speed, clamp mass, volume, and determinism gates."
+        ),
+        gif_args=(),
+    ),
+    SuiteSpec(
+        name="open_boundary",
+        module="inundation.bench.open_boundary",
+        title="Open boundaries (analytical cases and basin exchange)",
+        description=(
+            "Purpose: water leaving and entering a mesh at named stretches.\n"
+            "Setup: straight channels. Uniform flow, Ritter and Stoker dam breaks leaving a "
+            "cut, a lake held by its own level, M1 and M2 backwater, and one channel run "
+            "whole and in two basins.\n"
+            "Forcing and runtime: discharge inflow, normal depth, stage and free outflow.\n"
+            "Validation: analytic depth, measured volume balance, clamp mass, and the volume "
+            "passed between basins."
         ),
         gif_args=(),
     ),

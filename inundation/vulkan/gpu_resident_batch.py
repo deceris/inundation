@@ -27,7 +27,7 @@ import enum
 import math
 import sys
 import time as _time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import kp
 import numpy as np
@@ -43,6 +43,8 @@ from ..mesh.blocks import (
 from ..tuning import (
     ACTIVE_BLOCK_CELLS,
     CFL_DEFAULT,
+    OPEN_INFLOW,
+    OPEN_STAGE,
     compute_workgroups,
     dt_to_ticks,
     output_window_stops,
@@ -53,7 +55,7 @@ from ..tuning import (
 from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from numpy.typing import NDArray
 
@@ -120,8 +122,13 @@ def _pc_cfl_gather(nc: int, cfl: float) -> list[float]:
     return [uint_as_float_bits(nc), cfl]
 
 
-# Flag words per block in the active-set buffer: wet, active.
-_BLOCK_FLAG_WORDS = 2
+# Flag words per block in the active-set buffer: wet, active, forced.
+_BLOCK_FLAG_WORDS = 3
+_BLOCK_FORCED = 2
+# Words per open edge (OPEN_WORDS in the shaders): condition, value.
+_OPEN_WORDS = 2
+# Words per stretch of the tally: out (hi, lo), in (hi, lo).
+_TALLY_WORDS = 4
 _DILATE_WORKGROUP = 64
 # Per-edge words of the gather path's edge buffer (EF_WORDS in the shaders).
 _EDGE_FLUX_WORDS = 6
@@ -152,6 +159,14 @@ class SWESolverGpuResidentBatch(SWESolver):
     # number is the only knob.
     cfl_safety: float = 1.0
 
+    def __init__(
+        self, *args: Any, open_edges: Sequence[NDArray[np.int64]] = (), **kwargs: Any
+    ) -> None:
+        """``open_edges`` holds each open stretch's edges, as indices into ``geom``."""
+        self._open_stretches = [np.asarray(edges, dtype=np.int64) for edges in open_edges]
+        self.open_volume_snapshots: list[NDArray[np.float64]] = []
+        super().__init__(*args, **kwargs)
+
     def _build_tensors(
         self,
         geom: MeshGeometry,
@@ -168,6 +183,16 @@ class SWESolverGpuResidentBatch(SWESolver):
         # Edges sorted by the block of their left cell, so each edge workgroup
         # touches few blocks. Only the solver's copy is reordered.
         order = edge_order_by_block(geom.edge_cellL, ACTIVE_BLOCK_CELLS)
+        sorted_cell_r = geom.edge_cellR[order]
+        open_cell_r = sorted_cell_r.copy()
+        edge_position = np.empty(geom.E, dtype=np.int64)
+        edge_position[order] = np.arange(geom.E)
+        open_edges = edge_position[
+            np.concatenate([np.empty(0, dtype=np.int64), *self._open_stretches])
+        ]
+        self.n_open = int(open_edges.size)
+        open_cell_r[open_edges] = -2 - np.arange(self.n_open, dtype=np.int32)
+        self._open_cells = geom.edge_cellL[order][open_edges]
         sorted_geom = dataclasses.replace(
             geom,
             edge_len=geom.edge_len[order],
@@ -176,7 +201,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             edge_dzL=geom.edge_dzL[order],
             edge_dzR=geom.edge_dzR[order],
             edge_cellL=geom.edge_cellL[order],
-            edge_cellR=geom.edge_cellR[order],
+            edge_cellR=open_cell_r,
         )
         super()._build_tensors(sorted_geom, h0, hu0, hv0, n0)
         # dt slot 0: this step's dt; slot 1: next step's CFL bound (atomicMin).
@@ -196,9 +221,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             sorted_geom.edge_cellL, self._work_group_size, ACTIVE_BLOCK_CELLS
         )
         bptr, bidx = block_two_ring(
-            *block_adjacency(
-                sorted_geom.edge_cellL, sorted_geom.edge_cellR, self.N, ACTIVE_BLOCK_CELLS
-            )
+            *block_adjacency(sorted_geom.edge_cellL, sorted_cell_r, self.N, ACTIVE_BLOCK_CELLS)
         )
         self.t_blocks = self._mgr.tensor(
             _f32_bits(np.zeros(_BLOCK_FLAG_WORDS * self.n_blocks, dtype=np.uint32))
@@ -237,6 +260,31 @@ class SWESolverGpuResidentBatch(SWESolver):
             *self._gather_extra,
             *self._comp_extra,
         ]
+        # Open edges: (condition, value) words per edge, read where the update
+        # kernels read the clamp mass, and each stretch's edges and tally. Kompute
+        # rejects empty tensors: pad a mesh with no open edges.
+        n_stretches = len(self._open_stretches)
+        sizes = [edges.size for edges in self._open_stretches]
+        self.t_open = self._mgr.tensor(
+            _f32_bits(np.zeros(_OPEN_WORDS * max(self.n_open, 1), dtype=np.uint32))
+        )
+        self.t_open_ptr = self._mgr.tensor(
+            _f32_bits(np.r_[0, np.cumsum(sizes, dtype=np.int64)].astype(np.uint32))
+        )
+        self.t_open_edge = self._mgr.tensor(
+            _f32_bits(open_edges.astype(np.uint32) if self.n_open else np.zeros(1, np.uint32))
+        )
+        self.t_tally = self._mgr.tensor(
+            np.zeros(_TALLY_WORDS * max(n_stretches, 1), dtype=np.float32)
+        )
+        self._open_extra = [self.t_open, self.t_open_ptr, self.t_open_edge, self.t_tally]
+        self._flux_tensors = [
+            *self._all_tensors,
+            self.t_open,
+            *self._active_extra,
+            *self._gather_extra,
+            *self._comp_extra,
+        ]
         self._mgr.sequence().record(
             kp.OpTensorSyncDevice(
                 [
@@ -245,6 +293,7 @@ class SWESolverGpuResidentBatch(SWESolver):
                     *self._active_extra,
                     *self._gather_extra,
                     *self._comp_extra,
+                    *self._open_extra,
                 ]
             )
         ).eval()
@@ -258,7 +307,7 @@ class SWESolverGpuResidentBatch(SWESolver):
         self._algo_flux_stage = {
             gather: [
                 self._mgr.algorithm(
-                    self._active_tensors,
+                    self._flux_tensors,
                     spv["flux_resident_gather" if gather else "flux_resident"],
                     workgroup=wg_e,
                     spec_consts=[],
@@ -279,7 +328,7 @@ class SWESolverGpuResidentBatch(SWESolver):
         self._build_update_algos()
         self._build_cfl_algos(spv, N, E, wg_e, wg_c, g, dry_tol)
         self._algo_cfl_edge_gather = self._mgr.algorithm(
-            self._active_tensors,
+            self._flux_tensors,
             spv["cfl_edge_gather"],
             workgroup=wg_e,
             spec_consts=[],
@@ -327,6 +376,21 @@ class SWESolverGpuResidentBatch(SWESolver):
             push_consts=_pc_block_dilate(n_blk, force=False),
         )
         self._barrier_blocks = kp.OpComputeBarrier([self.t_blocks])
+
+        self._algo_tally = self._mgr.algorithm(
+            [
+                self.t_dtbuf,
+                self.t_edge_flux,
+                self.t_ecL,
+                self.t_blocks,
+                self.t_open_ptr,
+                self.t_open_edge,
+                self.t_tally,
+            ],
+            spv["tally_resident"],
+            workgroup=(max(len(self._open_stretches), 1), 1, 1),
+        )
+        self._barrier_tally = kp.OpComputeBarrier([self.t_tally])
 
         self._barrier_dt = kp.OpComputeBarrier([self.t_dtbuf, self.t_ctrl])
         self._barrier_cfl = kp.OpComputeBarrier(
@@ -396,7 +460,40 @@ class SWESolverGpuResidentBatch(SWESolver):
         zeros = np.zeros(self.N, dtype=np.float32)
         for tensor in self._comp_extra:
             self._set_tensor_host_data(tensor, zeros)
-        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._comp_extra)).eval()
+        self._set_tensor_host_data(self.t_tally, np.zeros(self.t_tally.size(), dtype=np.float32))
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([*self._comp_extra, self.t_tally])).eval()
+
+    def set_open_conditions(self, kinds: NDArray[np.uint32], values: NDArray[np.float32]) -> None:
+        """Set every open edge's condition, in stretch order, before a run or a phase.
+
+        A block with an edge that can bring water in from outside stays active
+        for as long as these conditions hold.
+        """
+        if kinds.size != self.n_open or values.size != self.n_open:
+            raise ValueError(
+                f"expected {self.n_open} open edges, got {kinds.size} kinds and "
+                f"{values.size} values"
+            )
+        words = np.empty(_OPEN_WORDS * self.n_open, dtype=np.uint32)
+        words[0::2] = kinds
+        words[1::2] = values.astype(np.float32).view(np.uint32)
+        self._set_tensor_host_data(self.t_open, _f32_bits(words))
+
+        brings_water = np.isin(kinds, (OPEN_INFLOW, OPEN_STAGE)) & (values > 0.0)
+        flags = np.zeros(_BLOCK_FLAG_WORDS * self.n_blocks, dtype=np.uint32)
+        forced = self._open_cells[brings_water] // ACTIVE_BLOCK_CELLS
+        flags[_BLOCK_FLAG_WORDS * forced + _BLOCK_FORCED] = 1
+        self._set_tensor_host_data(self.t_blocks, _f32_bits(flags))
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_open, self.t_blocks])).eval()
+
+    def download_open_volumes(self) -> NDArray[np.float64]:
+        """``(stretches, 2)`` volume [m^3] out of and into the mesh since the start."""
+        self._mgr.sequence().record(kp.OpTensorSyncLocal([self.t_tally])).eval()
+        words = np.asarray(self.t_tally.data(), dtype=np.float64)[
+            : _TALLY_WORDS * len(self._open_stretches)
+        ]
+        pairs = words.reshape(-1, _TALLY_WORDS)
+        return np.column_stack([pairs[:, 0] + pairs[:, 1], pairs[:, 2] + pairs[:, 3]])
 
     def download_h_residual(self) -> NDArray[np.float32]:
         """Low words of the compensated depth; zero unless ``compensated`` ran."""
@@ -427,7 +524,7 @@ class SWESolverGpuResidentBatch(SWESolver):
         self._eft_checked = True
 
     def download_block_flags(self) -> NDArray[np.uint32]:
-        """``(n_blocks, 2)`` active-set flags: wet, active."""
+        """``(n_blocks, 3)`` active-set flags: wet, active, forced."""
         self._mgr.sequence().record(kp.OpTensorSyncLocal([self.t_blocks])).eval()
         words = np.asarray(self.t_blocks.data()).view(np.uint32)
         return words.reshape(self.n_blocks, _BLOCK_FLAG_WORDS).copy()
@@ -444,6 +541,9 @@ class SWESolverGpuResidentBatch(SWESolver):
         for stage in (0, 1):
             seq.record(kp.OpAlgoDispatch(flux[stage]))
             seq.record(self._barrier_flux)
+            if self.n_open:
+                seq.record(kp.OpAlgoDispatch(self._algo_tally))
+                seq.record(self._barrier_tally)
             seq.record(kp.OpAlgoDispatch(update[stage]))
             seq.record(self._barrier_state)
         if use_source:
@@ -600,9 +700,12 @@ class SWESolverGpuResidentBatch(SWESolver):
         end_ticks = seconds_to_ticks(t_end)
         interval_ticks = seconds_to_ticks(output_interval_s)
 
+        if self.n_open and not self.deterministic:
+            raise ValueError("open boundaries need deterministic accumulation")
         if not resume:
             self._reset_to_initial()
-        if self.compensated:
+            self.open_volume_snapshots = []
+        if self.compensated or self.n_open:
             self._check_error_free_arithmetic()
         if self.track_clamp != self._update_track_clamp:
             self._build_update_algos()
@@ -622,12 +725,14 @@ class SWESolverGpuResidentBatch(SWESolver):
         hu_snapshots: list[NDArray[np.float32]] = []
         hv_snapshots: list[NDArray[np.float32]] = []
 
-        def capture_momentum() -> None:
+        def capture_with_snapshot() -> None:
             if capture_momentum_snapshots:
                 hu_snapshots.append(self.download_hu())
                 hv_snapshots.append(self.download_hv())
+            if self.n_open:
+                self.open_volume_snapshots.append(self.download_open_volumes())
 
-        capture_momentum()
+        capture_with_snapshot()
 
         ctrl = self._ctrl
         ctrl["now_ticks"] = start_ticks
@@ -675,7 +780,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             if not np.isfinite(h_snap).all():
                 snapshots.append(np.nan_to_num(h_snap, nan=0.0, posinf=0.0).copy())
                 snap_times.append(ticks_to_seconds(stop_ticks))
-                capture_momentum()
+                capture_with_snapshot()
                 finite = False
                 break
             # The final window may end short of a full interval: that is the end
@@ -690,7 +795,7 @@ class SWESolverGpuResidentBatch(SWESolver):
                     sys.stdout.flush()
                 snapshots.append(h_snap.copy())
                 snap_times.append(ticks_to_seconds(stop_ticks))
-                capture_momentum()
+                capture_with_snapshot()
 
         self.steps_total += int(ctrl["steps"][0])
 
@@ -699,7 +804,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             if not np.allclose(snapshots[-1], h_final):
                 snapshots.append(h_final.copy())
                 snap_times.append(ticks_to_seconds(int(ctrl["now_ticks"][0])))
-                capture_momentum()
+                capture_with_snapshot()
 
         if capture_momentum_snapshots:
             return snapshots, snap_times, hu_snapshots, hv_snapshots

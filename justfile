@@ -93,6 +93,10 @@ benchmark-propagation *args:
 benchmark-bowl *args:
     {{docker_prefix}} uv run python -m inundation.bench.parabolic_bowl {{args}}
 
+# Open boundaries: analytical cases and water passed between basins.
+benchmark-open-boundary *args:
+    {{docker_prefix}} uv run python -m inundation.bench.open_boundary {{args}}
+
 # Run the benchmark harnesses and fold logs, metrics, and animations into
 # one self-contained HTML report at .tmp/bench-report/report.html.
 benchmark-report *args:

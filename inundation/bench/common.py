@@ -890,7 +890,7 @@ def build_channel_mesh(
 
 def write_mesh_parquet(
     out_path: Path,
-    verts: NDArray[np.float32],
+    verts: NDArray[np.floating[Any]],
     faces: NDArray[np.int32],
     zb: NDArray[np.float32],
 ) -> None:

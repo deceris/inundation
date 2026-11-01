@@ -24,6 +24,7 @@ from .resident import (
     FLUX_RESIDENT_GLSL,
     SOURCE_RESIDENT_GLSL,
     STEP_CONTROL_GLSL,
+    TALLY_RESIDENT_GLSL,
     UPDATE_RESIDENT_COMP_GLSL,
     UPDATE_RESIDENT_GATHER_COMP_GLSL,
     UPDATE_RESIDENT_GATHER_GLSL,
@@ -91,6 +92,7 @@ def compile_all() -> dict[str, bytes]:
         "cfl_edge_gather": compile_glsl(CFL_EDGE_GATHER_GLSL, "cfl_edge_gather_kernel"),
         "cfl_gather": compile_glsl(CFL_GATHER_GLSL, "cfl_gather_kernel"),
         "eft_probe": compile_glsl(EFT_PROBE_GLSL, "eft_probe_kernel"),
+        "tally_resident": compile_glsl(TALLY_RESIDENT_GLSL, "tally_resident_kernel"),
     }
 
 
@@ -112,6 +114,7 @@ __all__ = [
     "SOURCE_GLSL",
     "SOURCE_RESIDENT_GLSL",
     "STEP_CONTROL_GLSL",
+    "TALLY_RESIDENT_GLSL",
     "UPDATE_DTBUF_GLSL",
     "UPDATE_GLSL",
     "UPDATE_RESIDENT_COMP_GLSL",

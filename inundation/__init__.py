@@ -6,19 +6,33 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .workflow import (
+        FreeOutflow,
+        Inflow,
+        NormalDepth,
+        OpenBoundary,
         PointSource,
         SimulationPhase,
+        Stage,
         SWEWorkflow,
+        Wall,
         WorkflowConfig,
         WorkflowResult,
+        inflow_phases,
     )
 
 __all__ = [
+    "FreeOutflow",
+    "Inflow",
+    "NormalDepth",
+    "OpenBoundary",
     "PointSource",
     "SWEWorkflow",
     "SimulationPhase",
+    "Stage",
+    "Wall",
     "WorkflowConfig",
     "WorkflowResult",
+    "inflow_phases",
 ]
 
 _SOLVER_EXPORTS = frozenset(__all__)
@@ -26,19 +40,7 @@ _SOLVER_EXPORTS = frozenset(__all__)
 
 def __getattr__(name: str) -> object:
     if name in _SOLVER_EXPORTS:
-        from .workflow import (  # pyright: ignore[reportMissingModuleSource]
-            PointSource,
-            SimulationPhase,
-            SWEWorkflow,
-            WorkflowConfig,
-            WorkflowResult,
-        )
+        from . import workflow  # pyright: ignore[reportMissingModuleSource]
 
-        return {
-            "PointSource": PointSource,
-            "SimulationPhase": SimulationPhase,
-            "SWEWorkflow": SWEWorkflow,
-            "WorkflowConfig": WorkflowConfig,
-            "WorkflowResult": WorkflowResult,
-        }[name]
+        return getattr(workflow, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -58,6 +58,13 @@ ACTIVE_BLOCK_CELLS = 256
 # for interface compatibility but return depth only, so the workflow refuses it.
 MOMENTUM_SNAPSHOT_BACKENDS = frozenset({"baseline", "gpu_resident_batch"})
 
+# Open boundary condition of an edge; the ``OPEN_*`` constants in the shaders.
+OPEN_WALL = 0
+OPEN_FREE = 1
+OPEN_NORMAL = 2
+OPEN_STAGE = 3
+OPEN_INFLOW = 4
+
 
 # ── Workflow (workflow.py) ────────────────────────────────────────────────────
 MIN_NDIM_NPY_INPUT = 2

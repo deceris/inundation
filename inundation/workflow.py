@@ -9,12 +9,13 @@ from __future__ import annotations
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
+from .mesh.boundaries import conveyance_split, select_boundary_edges
 from .mesh.cache import (
     geometry_cache_key,
     load_geometry_cache,
@@ -30,12 +31,17 @@ from .tuning import (
     MOMENTUM_SNAPSHOT_BACKENDS,
     NPY_COLS_HUV,
     NPY_COLS_WITH_MANNING,
+    OPEN_FREE,
+    OPEN_INFLOW,
+    OPEN_NORMAL,
+    OPEN_STAGE,
+    OPEN_WALL,
     REQUIRED_CLI_ARGS,
 )
 from .vulkan.shaders import SOURCE_GLSL, compile_all, compile_glsl
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from numpy.typing import NDArray
 
@@ -69,11 +75,64 @@ class PointSource:
 
 
 @dataclass(frozen=True)
+class OpenBoundary:
+    """A stretch of mesh boundary that a phase can open.
+
+    name:        how phases and results refer to the stretch.
+    line:        polyline in the mesh file's coordinates.
+    tolerance_m: boundary edges with midpoints this close to the line belong to it.
+    """
+
+    name: str
+    line: Sequence[tuple[float, float]]
+    tolerance_m: float
+
+
+@dataclass(frozen=True)
+class Wall:
+    """The stretch stays closed for this phase."""
+
+
+@dataclass(frozen=True)
+class FreeOutflow:
+    """Zero-gradient outflow. Exact for supercritical flow, partly reflects subcritical."""
+
+
+@dataclass(frozen=True)
+class NormalDepth:
+    """Outflow at the Manning velocity of the local depth, for an energy slope."""
+
+    energy_slope: float
+
+
+@dataclass(frozen=True)
+class Stage:
+    """A water level beyond the boundary [m, same datum as the bed]."""
+
+    elevation_m: float
+
+
+@dataclass(frozen=True)
+class Inflow:
+    """Discharge into the mesh, split over the section by Manning conveyance."""
+
+    discharge_m3s: float
+    energy_slope: float
+
+
+BoundaryCondition = Wall | FreeOutflow | NormalDepth | Stage | Inflow
+
+
+@dataclass(frozen=True)
 class SimulationPhase:
     """One phase in a multi-phase hydrograph schedule."""
 
     duration_s: float
     sources: Sequence[PointSource]
+    # The condition of every stretch in WorkflowConfig.open_boundaries, by name.
+    boundaries: Mapping[str, BoundaryCondition] = field(
+        default_factory=dict[str, BoundaryCondition]
+    )
 
 
 @dataclass(frozen=True)
@@ -115,6 +174,9 @@ class WorkflowConfig:
     # 8 bytes per cell per output on top of the depth. Only the backends in
     # MOMENTUM_SNAPSHOT_BACKENDS can do it; any other raises here.
     capture_momentum_snapshots: bool = False
+    # Stretches of boundary that phases can open. gpu_resident_batch only, with
+    # deterministic accumulation.
+    open_boundaries: Sequence[OpenBoundary] = ()
     steps_per_graph: int | None = None
     # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
     # instead of float atomics. None keeps the backend default (on).
@@ -167,6 +229,17 @@ class WorkflowConfig:
                 f"capture_momentum_snapshots is not supported by solver_impl "
                 f"{self.solver_impl!r}; use one of {sorted(MOMENTUM_SNAPSHOT_BACKENDS)}"
             )
+        if self.open_boundaries:
+            if self.solver_impl != "gpu_resident_batch":
+                raise ValueError(
+                    f"open_boundaries is not supported by solver_impl {self.solver_impl!r}; "
+                    "use gpu_resident_batch"
+                )
+            if self.deterministic is False:
+                raise ValueError("open_boundaries need deterministic accumulation")
+            names = [boundary.name for boundary in self.open_boundaries]
+            if len(set(names)) != len(names):
+                raise ValueError(f"open boundary names repeat: {sorted(names)}")
 
 
 @dataclass
@@ -190,6 +263,47 @@ class WorkflowResult:
     # Volume created by the update kernel's positivity clamp over the run.
     # None unless config.track_clamp_mass is enabled.
     clamp_mass_m3: float | None = None
+    # Per open stretch, (snapshots, 2) cumulative volume [m^3] out of and into the
+    # mesh, aligned with snap_times. Measured through the stretch's edges.
+    boundary_volumes_m3: dict[str, NDArray[np.float64]] = field(
+        default_factory=dict[str, "NDArray[np.float64]"]
+    )
+
+
+def inflow_phases(
+    upstream: WorkflowResult,
+    outlet: str,
+    into: str,
+    energy_slope: float,
+    other_boundaries: Mapping[str, BoundaryCondition] | None = None,
+    sources: Sequence[PointSource] = (),
+) -> list[SimulationPhase]:
+    """Phases passing the volume that left an upstream basin into the next basin.
+
+    One phase per output window of the upstream run, at that window's measured
+    mean discharge, so the volume of each window passes whole. ``outlet`` names
+    the upstream stretch, ``into`` the downstream one, and ``other_boundaries``
+    the conditions of the downstream basin's remaining stretches.
+    """
+    times = np.asarray(upstream.snap_times, dtype=np.float64)
+    volumes = upstream.boundary_volumes_m3[outlet][:, 0]
+    # Each phase's first snapshot repeats the previous phase's last.
+    window_ends = np.flatnonzero(np.diff(times) > 0.0) + 1
+    window_starts = np.r_[0, window_ends[:-1]]
+    return [
+        SimulationPhase(
+            float(times[end] - times[start]),
+            sources,
+            {
+                **(other_boundaries or {}),
+                into: Inflow(
+                    float((volumes[end] - volumes[start]) / (times[end] - times[start])),
+                    energy_slope,
+                ),
+            },
+        )
+        for start, end in zip(window_starts.tolist(), window_ends.tolist(), strict=True)
+    ]
 
 
 def _point_in_polygon(point: NDArray[np.float64], polygon: NDArray[np.float64]) -> bool:
@@ -257,6 +371,83 @@ def select_cells_within_radius(
         if _point_in_polygon(center, polygon):
             mask[cell_index] = True
     return mask
+
+
+def _open_stretch_edges(
+    geom: MeshGeometry, boundaries: Sequence[OpenBoundary]
+) -> list[NDArray[np.int64]]:
+    """Each stretch's boundary edges. A stretch selecting nothing is a mistake, so it raises."""
+    stretches = [
+        select_boundary_edges(geom, boundary.line, boundary.tolerance_m) for boundary in boundaries
+    ]
+    for boundary, edges in zip(boundaries, stretches, strict=True):
+        if not edges.size:
+            raise ValueError(
+                f"open boundary {boundary.name!r} selects no boundary edges within "
+                f"{boundary.tolerance_m} m of its line"
+            )
+    all_edges = np.concatenate(stretches) if stretches else np.empty(0, dtype=np.int64)
+    if np.unique(all_edges).size != all_edges.size:
+        raise ValueError("open boundaries select the same edge twice")
+    return stretches
+
+
+def _open_conditions(
+    geom: MeshGeometry,
+    manning: NDArray[np.float32],
+    boundary: OpenBoundary,
+    condition: BoundaryCondition,
+    edges: NDArray[np.int64],
+) -> tuple[int, NDArray[np.float32]]:
+    """Condition code and per-edge value of one stretch; see ``open_ghost`` in the kernels."""
+    cells = geom.edge_cellL[edges]
+    if isinstance(condition, Wall):
+        return OPEN_WALL, np.zeros(edges.size, dtype=np.float32)
+    if isinstance(condition, FreeOutflow):
+        return OPEN_FREE, np.zeros(edges.size, dtype=np.float32)
+    if isinstance(condition, NormalDepth):
+        if condition.energy_slope <= 0.0:
+            raise ValueError(f"open boundary {boundary.name!r} needs a positive energy slope")
+        return OPEN_NORMAL, (np.sqrt(condition.energy_slope) / manning[cells]).astype(np.float32)
+    if isinstance(condition, Stage):
+        depth = condition.elevation_m - geom.zb[cells].astype(np.float64)
+        return OPEN_STAGE, np.maximum(depth, 0.0).astype(np.float32)
+    if condition.energy_slope <= 0.0:
+        raise ValueError(f"open boundary {boundary.name!r} needs a positive energy slope")
+    if condition.discharge_m3s < 0.0:
+        raise ValueError(f"open boundary {boundary.name!r} has a negative inflow")
+    return OPEN_INFLOW, conveyance_split(
+        condition.discharge_m3s,
+        geom.edge_len[edges],
+        geom.zb[cells],
+        manning[cells],
+        condition.energy_slope,
+    )
+
+
+def _build_phase_open_conditions(
+    geom: MeshGeometry,
+    manning: NDArray[np.float32],
+    boundaries: Sequence[OpenBoundary],
+    stretches: Sequence[NDArray[np.int64]],
+    phase: SimulationPhase,
+) -> tuple[NDArray[np.uint32], NDArray[np.float32]]:
+    """Per-edge condition codes and values of one phase, in stretch order."""
+    names = {boundary.name for boundary in boundaries}
+    if set(phase.boundaries) != names:
+        raise ValueError(
+            f"phase boundaries {sorted(phase.boundaries)} must name every open boundary: "
+            f"{sorted(names)}"
+        )
+    kinds: list[NDArray[np.uint32]] = []
+    values: list[NDArray[np.float32]] = []
+    for boundary, edges in zip(boundaries, stretches, strict=True):
+        kind, value = _open_conditions(
+            geom, manning, boundary, phase.boundaries[boundary.name], edges
+        )
+        kinds.append(np.full(edges.size, kind, dtype=np.uint32))
+        values.append(value)
+    return np.concatenate(kinds), np.concatenate(values)
 
 
 def _as_1d_float32(name: str, values: object, n_expected: int) -> NDArray[np.float32]:
@@ -468,6 +659,8 @@ class SWEWorkflow:
         self.geom: MeshGeometry | None = None
         self.perm: NDArray[np.int32] | None = None
         self.verts: NDArray[np.float64] | None = None
+        self._open_stretches: list[NDArray[np.int64]] = []
+        self._manning: NDArray[np.float32] = np.empty(0, dtype=np.float32)
         self.faces_flat: NDArray[np.int32] | None = None
         self.face_offsets: NDArray[np.int32] | None = None
         self.zb_from_file: NDArray[np.float32] | None = None
@@ -621,6 +814,12 @@ class SWEWorkflow:
             "gpu_resident_batch": SWESolverGpuResidentBatch,
         }
         solver_cls = solver_cls_by_impl[self.config.solver_impl]
+        self._open_stretches = _open_stretch_edges(geom, self.config.open_boundaries)
+        self._manning = n0
+        # WorkflowConfig accepts open boundaries on gpu_resident_batch only.
+        open_args: dict[str, Any] = (
+            {"open_edges": self._open_stretches} if self._open_stretches else {}
+        )
         solver = solver_cls(
             geom,
             spv,
@@ -632,6 +831,7 @@ class SWEWorkflow:
             dry_tol=self.config.dry_tol,
             cfl=self.config.cfl,
             workgroup_size=self.config.workgroup_size,
+            **open_args,
         )
 
         self.geom = geom
@@ -684,6 +884,16 @@ class SWEWorkflow:
 
             t_end = t_current + phase.duration_s
             src = _build_phase_source_rate(self.geom, phase, valid_cell)
+            if self._open_stretches:
+                cast("SWESolverGpuResidentBatch", self.solver).set_open_conditions(
+                    *_build_phase_open_conditions(
+                        self.geom,
+                        self._manning,
+                        self.config.open_boundaries,
+                        self._open_stretches,
+                        phase,
+                    )
+                )
 
             # Backend-specific extra: the barrier backend switches snapshot
             # cadence to step-count based.
@@ -762,6 +972,14 @@ class SWEWorkflow:
                 np.asarray(cast("NDArray[np.float32]", download_clamp()), dtype=np.float64).sum()
             )
 
+        boundary_volumes_m3: dict[str, NDArray[np.float64]] = {}
+        if self._open_stretches:
+            volumes = np.stack(cast("SWESolverGpuResidentBatch", self.solver).open_volume_snapshots)
+            boundary_volumes_m3 = {
+                boundary.name: volumes[:, k]
+                for k, boundary in enumerate(self.config.open_boundaries)
+            }
+
         return WorkflowResult(
             snapshots=snapshots,
             snap_times=snap_times,
@@ -775,6 +993,7 @@ class SWEWorkflow:
             hu_snapshots=hu_snapshots,
             hv_snapshots=hv_snapshots,
             clamp_mass_m3=clamp_mass_m3,
+            boundary_volumes_m3=boundary_volumes_m3,
         )
 
 
