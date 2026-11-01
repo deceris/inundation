@@ -232,9 +232,13 @@ error. Validate source locations against the mesh in the calling application
 before running. `volume_injected_m3` is calculated from the requested source
 schedule, so it can include discharge from a source that selected no cells.
 
-The public workflow API currently represents inflow with volumetric point
-sources. It does not expose explicit open-boundary forcing. Mesh boundaries
-use the solver's wall treatment.
+Inflow can be a volumetric point source or an open boundary. A mesh edge is a
+wall unless `WorkflowConfig.open_boundaries` names a stretch of it as an
+`OpenBoundary`. Each `SimulationPhase` then gives that stretch a `Wall`,
+`FreeOutflow`, `NormalDepth`, `Stage` or `Inflow` in `boundaries`, and
+`boundary_volumes_m3` reports the volume out of and into each stretch at every
+output window. `inflow_phases` turns a stretch's measured outflow into the inflow
+of the next basin. The exchange is one way, so backwater cannot cross a cut.
 
 `dt_max` is the maximum numerical timestep, not the snapshot interval.
 `output_interval_s` controls depth snapshot timing. `cfl_interval` controls how

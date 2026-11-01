@@ -1,6 +1,6 @@
 # Open Boundaries — Plan
 
-**Status: design choices settled, build waiting for approval.** Nothing is built.
+**Status: built.** Results and departures from this plan are in [results.md](results.md).
 Third of the four solver items for the pavé meshes.
 
 ## Goal
