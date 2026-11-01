@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import html
+import subprocess
+import sys
 from typing import TYPE_CHECKING
+
+import pytest
 
 from inundation.bench.report import (
     SUITES,
     SuiteResult,
+    SuiteSpec,
     _description_details,
     render_html,
 )
@@ -134,3 +139,17 @@ def test_the_wetting_and_drying_case_is_a_gate() -> None:
 
 def test_open_boundaries_are_a_gate() -> None:
     assert "open_boundary" in {spec.name for spec in SUITES}
+
+
+@pytest.mark.parametrize("spec", SUITES, ids=lambda spec: spec.name)
+def test_every_suite_accepts_the_arguments_the_report_passes(spec: SuiteSpec) -> None:
+    # argparse names every unknown argument and exits before any suite starts.
+    command = [sys.executable, "-m", spec.module, "--repeats", "2", "--warmup", "1"]
+    done = subprocess.run(  # noqa: S603
+        [*command, "--cfl", "0.5", "--output-dir", ".tmp/x", "--not-an-argument"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 2
+    assert "unrecognized arguments: --not-an-argument" in done.stderr

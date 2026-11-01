@@ -572,27 +572,44 @@ CASES: dict[str, Callable[[Path, float | None], list[dict[str, Any]]]] = {
 }
 
 
+def _metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``rows`` without their wall time, the one figure repeat runs may differ in."""
+    return [{k: v for k, v in row.items() if k != "wall_s"} for row in rows]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Open boundaries against analytical solutions")
     parser.add_argument("--case", choices=sorted(CASES), action="append")
     parser.add_argument("--cfl", type=float, default=None, help="CFL number")
     parser.add_argument("--output-dir", type=Path, default=Path(".tmp/open-boundary"))
+    parser.add_argument("--repeats", type=int, default=2, help=">=2 enables determinism checks")
+    parser.add_argument("--warmup", type=int, default=0, help="Runs of the lake case to discard")
     args = parser.parse_args()
+
+    work_dir = args.output_dir / "meshes"
+    for _ in range(args.warmup):
+        case_lake(work_dir, args.cfl)
 
     correctness: list[dict[str, Any]] = []
     performance: list[dict[str, Any]] = []
     for name in args.case or list(CASES):
-        rows = CASES[name](args.output_dir / "meshes", args.cfl)
-        for row in rows:
+        repeats = [CASES[name](work_dir, args.cfl) for _ in range(max(1, args.repeats))]
+        deterministic = all(_metrics(rows) == _metrics(repeats[0]) for rows in repeats)
+        for row, *others in zip(*repeats, strict=True):
             row["backend"] = "gpu_resident_batch"
+            row["deterministic"] = deterministic
+            if not deterministic:
+                row["fail_reasons"].append("repeat runs differ")
             row["passed"] = not row["fail_reasons"]
             correctness.append(row)
             performance.append(
                 {
                     "case": row["case"],
                     "backend": "gpu_resident_batch",
-                    "repeats": 1,
-                    "median_wall_s": statistics.median([row.get("wall_s", 0.0)]),
+                    "repeats": len(repeats),
+                    "median_wall_s": statistics.median(
+                        r.get("wall_s", 0.0) for r in (row, *others)
+                    ),
                     "steps_total": row.get("steps", 0),
                 }
             )
