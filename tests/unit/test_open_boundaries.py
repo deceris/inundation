@@ -8,14 +8,17 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pytest
 
+from inundation.bench.common import build_channel_mesh
 from inundation.bench.open_boundary import gradually_varied_profile, normal_depth
 from inundation.mesh.boundaries import (
     boundary_edge_midpoints,
     conveyance_split,
     distance_to_line,
     select_boundary_edges,
+    select_boundary_segments,
 )
 from inundation.mesh.geometry import build_geometry, hilbert_reorder
+from inundation.tuning import BORDER_TOLERANCE_M
 from inundation.workflow import (
     FreeOutflow,
     Inflow,
@@ -260,3 +263,25 @@ def test_the_backwater_reference_rises_towards_a_high_level() -> None:
     x = np.linspace(100.0, 2900.0, 8)
     depths = gradually_varied_profile(x, 0.8, 0.25)
     assert (np.diff(depths) > 0.0).all()
+
+
+@pytest.mark.parametrize(("dx", "dy"), [(k, m) for k in (-1, 1) for m in (-1, 1)])
+def test_a_rounded_midpoint_still_finds_its_edge_across_grid_lines(dx: int, dy: int) -> None:
+    """Rounding can put a segment on the far side of a lookup square, diagonally too."""
+    verts, quads = build_channel_mesh(4, 2, 40.0, 20.0)
+    geom = build_geometry(verts, quads, zb_from_file=np.zeros(quads.shape[0], dtype=np.float32))
+    wanted, midpoints = boundary_edge_midpoints(geom)
+    shift = 0.9 * BORDER_TOLERANCE_M * np.array([dx, dy]) / np.sqrt(2.0)
+    world = midpoints + geom.origin + shift
+    along = np.array([[1.0, 0.0]])
+    segments = np.column_stack([world - along, world + along])
+    np.testing.assert_array_equal(
+        select_boundary_segments(geom, segments, BORDER_TOLERANCE_M), wanted
+    )
+
+
+def test_a_segment_matching_no_edge_raises() -> None:
+    verts, quads = build_channel_mesh(4, 2, 40.0, 20.0)
+    geom = build_geometry(verts, quads, zb_from_file=np.zeros(quads.shape[0], dtype=np.float32))
+    with pytest.raises(ValueError, match="1 of 1 segments match no boundary edge"):
+        select_boundary_segments(geom, np.array([[9.0, 9.0, 11.0, 9.0]]), BORDER_TOLERANCE_M)

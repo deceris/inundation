@@ -22,6 +22,8 @@ from .resident import (
     EFT_PROBE_GLSL,
     FLUX_RESIDENT_GATHER_GLSL,
     FLUX_RESIDENT_GLSL,
+    FLUX_RESIDENT_MUSCL_GLSL,
+    GRADIENT_RESIDENT_GLSL,
     SOURCE_RESIDENT_GLSL,
     STEP_CONTROL_GLSL,
     TALLY_RESIDENT_GLSL,
@@ -80,6 +82,8 @@ def compile_all() -> dict[str, bytes]:
         "flux_resident_gather": compile_glsl(
             FLUX_RESIDENT_GATHER_GLSL, "flux_resident_gather_kernel"
         ),
+        "flux_resident_muscl": compile_glsl(FLUX_RESIDENT_MUSCL_GLSL, "flux_resident_muscl_kernel"),
+        "gradient_resident": compile_glsl(GRADIENT_RESIDENT_GLSL, "gradient_resident_kernel"),
         "update_resident_gather": compile_glsl(
             UPDATE_RESIDENT_GATHER_GLSL, "update_resident_gather_kernel"
         ),
@@ -110,6 +114,8 @@ __all__ = [
     "FLUX_GLSL",
     "FLUX_RESIDENT_GATHER_GLSL",
     "FLUX_RESIDENT_GLSL",
+    "FLUX_RESIDENT_MUSCL_GLSL",
+    "GRADIENT_RESIDENT_GLSL",
     "SOURCE_DTBUF_GLSL",
     "SOURCE_GLSL",
     "SOURCE_RESIDENT_GLSL",

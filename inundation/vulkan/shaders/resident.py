@@ -292,7 +292,66 @@ _FLUX_CFL_GATHER = """\
 """
 
 
-def _flux_resident(gather: bool) -> str:
+# Linear reconstruction (``muscl`` on the solver), see
+# ``docs/implementation/31-muscl/plan.md``. Binding 30 holds each cell's limited
+# gradients of level, x velocity and y velocity for this stage, 31 the offset from each
+# side's centroid to the edge midpoint, 32 each cell's bed gradient, which never changes.
+# Below MUSCL_DEPTHS dry tolerances a cell has no gradient, so fronts stay first order.
+_MUSCL_BINDINGS = """\
+layout(set=0, binding=30) buffer GRAD   { float grad[];  };
+layout(set=0, binding=31) buffer EOFF   { float eoff[];  };
+layout(set=0, binding=32) buffer GBED   { float gbed[];  };
+
+const uint GRAD_WORDS = 6u;
+const float MUSCL_DEPTHS = 10.0;
+const float MUSCL_FACE_CHANGE = 0.25;
+"""
+
+# Moves one side's state from the centroid to the edge midpoint, and returns how far the
+# bed rose on the way. A face far from the cell's depth keeps the cell's own state: on a
+# steep bed it could ask a shallow cell for more than it holds, which the clamp would then
+# create. The level stays consistent across the edge either way, so a lake stays at rest.
+_MUSCL_FACE_GLSL = """\
+float muscl_face(int c, float rx, float ry, inout float h_, inout float hu_, inout float hv_) {
+    if (h_ < MUSCL_DEPTHS * pc.dry_tol) return 0.0;
+    uint o = GRAD_WORDS * uint(c);
+    float rise = gbed[2u * uint(c)] * rx + gbed[2u * uint(c) + 1u] * ry;
+    float face = h_ + grad[o] * rx + grad[o + 1u] * ry - rise;
+    if (abs(face - h_) > MUSCL_FACE_CHANGE * h_) return 0.0;
+    float u_ = safe_vel(h_, hu_) + grad[o + 2u] * rx + grad[o + 3u] * ry;
+    float v_ = safe_vel(h_, hv_) + grad[o + 4u] * rx + grad[o + 5u] * ry;
+    h_ = face;
+    hu_ = face * u_;
+    hv_ = face * v_;
+    return rise;
+}
+"""
+
+# The kernels work from the steps, so the bed difference across the edge comes from them.
+_FLUX_MUSCL_GATHER = """\
+    float hLc = hL, hRc = hR, riseL = 0.0, riseR = 0.0;
+    if (cR >= 0) {
+        riseL = muscl_face(cL, eoff[4u * eid], eoff[4u * eid + 1u], hL, huL, hvL);
+        riseR = muscl_face(cR, eoff[4u * eid + 2u], eoff[4u * eid + 3u], hR, huR, hvR);
+        float across = dzL - dzR + riseR - riseL;
+        dzL = max(across, 0.0);
+        dzR = max(-across, 0.0);
+    }
+"""
+
+_FLUX_BED_PLAIN = """\
+    float SL_g = 0.5 * pc.g * (hL * hL - hLs * hLs);
+    float SR_g = 0.5 * pc.g * (hR * hR - hRs * hRs);
+"""
+
+# Audusse-Bristeau: the interface term from the face depth, plus the bed slope in the cell.
+_FLUX_BED_MUSCL = """\
+    float SL_g = 0.5 * pc.g * (hL * hL - hLs * hLs + (hLc + hL) * riseL);
+    float SR_g = 0.5 * pc.g * (hR * hR - hRs * hRs + (hRc + hR) * riseR);
+"""
+
+
+def _flux_resident(gather: bool, muscl: bool = False) -> str:
     return (
         "#version 450\n"
         + ("" if gather else "#extension GL_EXT_shader_atomic_float : require\n")
@@ -300,6 +359,7 @@ def _flux_resident(gather: bool) -> str:
         + _BINDINGS
         + _ACTIVE_BINDINGS
         + (_GATHER_BINDINGS + _OPEN_BINDINGS if gather else "")
+        + (_MUSCL_BINDINGS if muscl else "")
         + """
 layout(push_constant) uniform PC {
     uint  num_edges;
@@ -313,6 +373,7 @@ layout(push_constant) uniform PC {
 """
         + HLLC_GLSL
         + (_OPEN_GHOST_GLSL if gather else "")
+        + (_MUSCL_FACE_GLSL if muscl else "")
         + """\
 // The corrector reads the predictor state, except in an inactive block: its
 // predictor state was not computed this step and is stale, and the full step
@@ -363,6 +424,7 @@ void main() {
     float dzR = edz[2u * eid + 1u];
 """
         + (_FLUX_STEP_GATHER if gather else "")
+        + (_FLUX_MUSCL_GATHER if muscl else "")
         + """
     float hLs, hqnL, hqtL, hRs, hqnR, hqtR;
     face_states(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_,
@@ -378,9 +440,9 @@ void main() {
 
     // Audusse (2004) hydrostatic-reconstruction source term — see FLUX_GLSL
     // for the derivation. Identical to the other flux variants.
-    float SL_g = 0.5 * pc.g * (hL * hL - hLs * hLs);
-    float SR_g = 0.5 * pc.g * (hR * hR - hRs * hRs);
-
+"""
+        + (_FLUX_BED_MUSCL if muscl else _FLUX_BED_PLAIN)
+        + """
 """
         + (_FLUX_ACCUM_GATHER if gather else _FLUX_ACCUM_ATOMIC)
         + """
@@ -400,6 +462,111 @@ void main() {
 
 FLUX_RESIDENT_GLSL = _flux_resident(gather=False)
 FLUX_RESIDENT_GATHER_GLSL = _flux_resident(gather=True)
+FLUX_RESIDENT_MUSCL_GLSL = _flux_resident(gather=True, muscl=True)
+
+# Green-Gauss gradients from differences to the neighbours, in the cell's fixed edge
+# order. Walls and open edges count as no difference, and a wet cell beside a dry one
+# has no gradient. Barth-Jespersen then scales each gradient so that no edge midpoint
+# goes beyond the cell and its neighbours.
+GRADIENT_RESIDENT_GLSL = (
+    """\
+#version 450
+
+layout(local_size_x = 256) in;
+
+"""
+    + _BINDINGS
+    + _ACTIVE_BINDINGS
+    + _GATHER_BINDINGS
+    + _MUSCL_BINDINGS
+    + """
+layout(push_constant) uniform PC {
+    uint  num_cells;
+    float dt_unused;
+    float g;
+    float dry_tol;
+    float cfl_number;
+    float stage;
+} pc;
+
+"""
+    + HLLC_GLSL
+    + """\
+void load_state(uint c, out float h_, out float hu_, out float hv_) {
+    if (pc.stage > 0.5 && block_active(block_of(c))) {
+        h_ = h1[c]; hu_ = hu1[c]; hv_ = hv1[c];
+    } else {
+        h_ = h[c]; hu_ = hu[c]; hv_ = hv[c];
+    }
+}
+
+float limited(float slope, float low, float high) {
+    if (slope > 0.0) { return min(1.0, high / slope); }
+    if (slope < 0.0) { return min(1.0, low / slope); }
+    return 1.0;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.num_cells) return;
+    if (dt_buf_u[0] == 0u) return;
+    if (!block_active(block_of(i))) return;
+
+    uint o = GRAD_WORDS * i;
+    float wet = MUSCL_DEPTHS * pc.dry_tol;
+    float hi, hui, hvi;
+    load_state(i, hi, hui, hvi);
+    bool usable = hi >= wet;
+
+    vec2 ge = vec2(0.0), gu = vec2(0.0), gv = vec2(0.0);
+    vec3 low = vec3(0.0), high = vec3(0.0);
+    float ui = safe_vel(hi, hui), vi = safe_vel(hi, hvi);
+    uint kend = cptr[i + 1u];
+    for (uint k = cptr[i]; usable && k < kend; ++k) {
+        uint s = cidx[k];
+        uint e = s >> 1;
+        bool right = (s & 1u) != 0u;
+        int nb = right ? ecL[e] : ecR[e];
+        if (nb < 0) continue;
+        float hn, hun, hvn;
+        load_state(uint(nb), hn, hun, hvn);
+        if (hn < wet) { usable = false; break; }
+        float rise = right ? edz[2u * e + 1u] - edz[2u * e] : edz[2u * e] - edz[2u * e + 1u];
+        vec3 diff = vec3(hn - hi + rise, safe_vel(hn, hun) - ui, safe_vel(hn, hvn) - vi);
+        low = min(low, diff);
+        high = max(high, diff);
+        float side = right ? -0.5 * elen[e] : 0.5 * elen[e];
+        vec2 n = side * vec2(enx[e], eny[e]);
+        ge += diff.x * n;
+        gu += diff.y * n;
+        gv += diff.z * n;
+    }
+    if (!usable) {
+        for (uint w = 0u; w < GRAD_WORDS; ++w) { grad[o + w] = 0.0; }
+        return;
+    }
+    ge /= area[i];
+    gu /= area[i];
+    gv /= area[i];
+    float pe = 1.0, pu = 1.0, pv = 1.0;
+    for (uint k = cptr[i]; k < kend; ++k) {
+        uint s = cidx[k];
+        uint e = s >> 1;
+        uint q = (s & 1u) != 0u ? 4u * e + 2u : 4u * e;
+        vec2 r = vec2(eoff[q], eoff[q + 1u]);
+        pe = min(pe, limited(dot(ge, r), low.x, high.x));
+        pu = min(pu, limited(dot(gu, r), low.y, high.y));
+        pv = min(pv, limited(dot(gv, r), low.z, high.z));
+    }
+    grad[o]      = pe * ge.x;
+    grad[o + 1u] = pe * ge.y;
+    grad[o + 2u] = pu * gu.x;
+    grad[o + 3u] = pu * gu.y;
+    grad[o + 4u] = pv * gv.x;
+    grad[o + 5u] = pv * gv.y;
+}
+"""
+)
 
 _UPDATE_SUM_ATOMIC = """\
     float sdh  = dh[i];

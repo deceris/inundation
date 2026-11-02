@@ -181,6 +181,8 @@ class WorkflowConfig:
     # Segments (K, 4) x0, y0, x1, y1, each one boundary edge and its own stretch, after
     # open_boundaries. Basin borders, set by the coupling driver.
     border_segments: NDArray[np.float64] | None = None
+    # "first_order", or "muscl" for linear reconstruction on gpu_resident_batch.
+    reconstruction: str = "first_order"
     steps_per_graph: int | None = None
     # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
     # instead of float atomics. None keeps the backend default (on).
@@ -233,6 +235,12 @@ class WorkflowConfig:
                 f"capture_momentum_snapshots is not supported by solver_impl "
                 f"{self.solver_impl!r}; use one of {sorted(MOMENTUM_SNAPSHOT_BACKENDS)}"
             )
+        if self.reconstruction not in ("first_order", "muscl"):
+            raise ValueError(f"unsupported reconstruction: {self.reconstruction}")
+        if self.reconstruction == "muscl" and (
+            self.solver_impl != "gpu_resident_batch" or self.deterministic is False
+        ):
+            raise ValueError("muscl needs gpu_resident_batch and deterministic accumulation")
         if self.open_boundaries:
             if self.solver_impl != "gpu_resident_batch":
                 raise ValueError(
@@ -831,6 +839,8 @@ class SWEWorkflow:
         open_args: dict[str, Any] = (
             {"open_edges": self._open_stretches} if self._open_stretches else {}
         )
+        if self.config.reconstruction == "muscl":
+            open_args["muscl"] = True
         solver = solver_cls(
             geom,
             spv,

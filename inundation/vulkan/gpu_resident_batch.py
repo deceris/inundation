@@ -40,6 +40,7 @@ from ..mesh.blocks import (
     num_blocks,
     remap_cell_edges,
 )
+from ..mesh.reconstruction import cell_bed_gradient, edge_midpoint_offsets
 from ..tuning import (
     ACTIVE_BLOCK_CELLS,
     CFL_DEFAULT,
@@ -77,6 +78,7 @@ RESIDENT_CTRL_DTYPE = np.dtype(
 )
 
 STEPS_PER_GRAPH_DEFAULT = 200
+_GRAD_WORDS = 6
 _DT_BINDING = 17
 
 
@@ -160,10 +162,18 @@ class SWESolverGpuResidentBatch(SWESolver):
     cfl_safety: float = 1.0
 
     def __init__(
-        self, *args: Any, open_edges: Sequence[NDArray[np.int64]] = (), **kwargs: Any
+        self,
+        *args: Any,
+        open_edges: Sequence[NDArray[np.int64]] = (),
+        muscl: bool = False,
+        **kwargs: Any,
     ) -> None:
-        """``open_edges`` holds each open stretch's edges, as indices into ``geom``."""
+        """``open_edges`` holds each open stretch's edges, as indices into ``geom``.
+
+        ``muscl`` adds linear reconstruction; the first-order kernels are not touched.
+        """
         self._open_stretches = [np.asarray(edges, dtype=np.int64) for edges in open_edges]
+        self.muscl = muscl
         self.open_volume_snapshots: list[NDArray[np.float64]] = []
         super().__init__(*args, **kwargs)
 
@@ -287,6 +297,17 @@ class SWESolverGpuResidentBatch(SWESolver):
             *self._gather_extra,
             *self._comp_extra,
         ]
+        self._muscl_tensors: list[Any] = []
+        if self.muscl:
+            offsets = edge_midpoint_offsets(geom)[order]
+            self.t_grad = self._mgr.tensor(np.zeros(_GRAD_WORDS * self.N, dtype=np.float32))
+            self.t_eoff = self._mgr.tensor(offsets.ravel().astype(np.float32))
+            self.t_gbed = self._mgr.tensor(cell_bed_gradient(geom).ravel().astype(np.float32))
+            self._muscl_tensors = [*self._flux_tensors, self.t_grad, self.t_eoff, self.t_gbed]
+            self._mgr.sequence().record(
+                kp.OpTensorSyncDevice([self.t_grad, self.t_eoff, self.t_gbed])
+            ).eval()
+            self._barrier_grad = kp.OpComputeBarrier([self.t_grad])
         self._mgr.sequence().record(
             kp.OpTensorSyncDevice(
                 [
@@ -319,6 +340,29 @@ class SWESolverGpuResidentBatch(SWESolver):
             ]
             for gather in (False, True)
         }
+        if self.muscl:
+            if not self.deterministic:
+                raise ValueError("muscl needs deterministic accumulation")
+            self._algo_flux_stage[True] = [
+                self._mgr.algorithm(
+                    self._muscl_tensors,
+                    spv["flux_resident_muscl"],
+                    workgroup=wg_e,
+                    spec_consts=[],
+                    push_consts=_pc_flux(E, 0.0, g, dry_tol, self._cfl, stage),
+                )
+                for stage in (0, 1)
+            ]
+            self._algo_gradient = [
+                self._mgr.algorithm(
+                    self._muscl_tensors,
+                    spv["gradient_resident"],
+                    workgroup=wg_c,
+                    spec_consts=[],
+                    push_consts=_pc_flux(N, 0.0, g, dry_tol, self._cfl, stage),
+                )
+                for stage in (0, 1)
+            ]
         # Keyed by (deterministic, compensated).
         self._update_spv = {
             (False, False): spv["update_resident"],
@@ -565,6 +609,9 @@ class SWESolverGpuResidentBatch(SWESolver):
         flux = self._algo_flux_stage[self.deterministic]
         update = self._algo_update_stage[(self.deterministic, self.compensated)]
         for stage in (0, 1):
+            if self.muscl:
+                seq.record(kp.OpAlgoDispatch(self._algo_gradient[stage]))
+                seq.record(self._barrier_grad)
             seq.record(kp.OpAlgoDispatch(flux[stage]))
             seq.record(self._barrier_flux)
             if self.n_open:

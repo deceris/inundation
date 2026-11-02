@@ -265,16 +265,16 @@ def test_water_crosses_a_bed_step_as_in_one_channel(
         return np.where(x < CUT_M, first_depth, second_depth)
 
     whole, upper, lower = _channels(bed)
-    run = [SimulationPhase(WINDOW_S, [], {}) for _ in range(30)]
+    run = [SimulationPhase(300.0, [], {})]
     control = _whole_depth(_config(tmp_path, "whole", whole, (), full(whole.centres)), run)
     result = run_two_basins(
         Basin(_config(tmp_path, "upper", upper, (), full(upper.centres)), run),
         Basin(_config(tmp_path, "lower", lower, (), full(lower.centres)), run),
         _border(),
-        WINDOW_S,
+        2.0,
     )
     _assert_clean(result)
-    assert np.abs(_coupled_depth(result) - control).max() < 0.012
+    assert np.abs(_coupled_depth(result) - control).max() < 0.003
 
 
 def test_a_trickle_too_thin_to_wet_a_cell_still_arrives(tmp_path: Path) -> None:
