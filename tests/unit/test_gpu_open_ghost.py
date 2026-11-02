@@ -15,6 +15,7 @@ import pytest
 
 from inundation.tuning import (
     GRAVITY_G,
+    OPEN_EXCHANGE,
     OPEN_FREE,
     OPEN_INFLOW,
     OPEN_NORMAL,
@@ -40,6 +41,7 @@ pytestmark = requires_vulkan
 
 DRY_TOL = 1e-4
 CASE_WORDS = 6
+OPEN_WORDS = 3
 RESULT_WORDS = 4
 
 _PROBE_GLSL = (
@@ -86,21 +88,23 @@ def _ghost(
     *,
     normal: tuple[float, float] = (1.0, 0.0),
     hllc_flux: float = 0.0,
+    received: float = 0.0,
 ) -> tuple[float, ...]:
-    return _ghosts([(h, hu, hv, kind, value, normal, hllc_flux)])[0]
+    return _ghosts([(h, hu, hv, kind, value, normal, hllc_flux, received)])[0]
 
 
 def _ghosts(
-    cases: Sequence[tuple[float, float, float, int, float, tuple[float, float], float]],
+    cases: Sequence[tuple[float, float, float, int, float, tuple[float, float], float, float]],
 ) -> NDArray[np.float32]:
     import kp
 
     inputs = np.array(
-        [[h, hu, hv, n[0], n[1], flux] for h, hu, hv, _, _, n, flux in cases], dtype=np.float32
+        [[h, hu, hv, n[0], n[1], flux] for h, hu, hv, _, _, n, flux, _ in cases], dtype=np.float32
     )
-    words = np.zeros((len(cases), 2), dtype=np.uint32)
+    words = np.zeros((len(cases), OPEN_WORDS), dtype=np.uint32)
     words[:, 0] = [case[3] for case in cases]
     words[:, 1] = np.array([case[4] for case in cases], dtype=np.float32).view(np.uint32)
+    words[:, 2] = np.array([case[7] for case in cases], dtype=np.float32).view(np.uint32)
     manager = kp.Manager()
     tensors = [
         manager.tensor(inputs.ravel()),
@@ -166,6 +170,59 @@ def test_a_stage_keeps_the_outgoing_characteristic() -> None:
     un = u + 2.0 * (math.sqrt(GRAVITY_G * h) - math.sqrt(GRAVITY_G * depth))
     ghost = _ghost(h, h * u, 0.0, OPEN_STAGE, depth, hllc_flux=-0.7)
     assert ghost == pytest.approx((depth, depth * un, 0.0, -0.7), rel=1e-5)
+
+
+def test_a_lower_neighbour_leaves_the_cell_on_its_outgoing_characteristic() -> None:
+    h, u, depth = 2.0, 0.5, 1.0
+    un = u + 2.0 * (math.sqrt(GRAVITY_G * h) - math.sqrt(GRAVITY_G * depth))
+    ghost = _ghost(h, h * u, 0.0, OPEN_EXCHANGE, depth, hllc_flux=0.7)
+    assert ghost == pytest.approx((depth, depth * un, 0.0, 0.7), rel=1e-5)
+
+
+def test_a_lower_neighbour_cannot_reach_a_supercritical_outflow() -> None:
+    h, u = 0.5, 3.0
+    assert _ghost(h, h * u, 0.0, OPEN_EXCHANGE, 0.1)[:3] == pytest.approx((h, h * u, 0.0), rel=1e-5)
+
+
+def test_a_higher_neighbour_is_a_wall_for_mass_and_momentum() -> None:
+    h, u = 0.5, 0.4
+    ghost = _ghost(h, h * u, 0.1, OPEN_EXCHANGE, 2.0, hllc_flux=-0.3)
+    assert ghost == pytest.approx((h, -h * u, 0.1, 0.0), rel=1e-5)
+
+
+def test_a_higher_neighbour_cannot_push_a_nearly_dry_cell() -> None:
+    assert _ghost(1e-3, 0.0, 0.0, OPEN_EXCHANGE, 2.0)[1] == 0.0
+
+
+def test_received_water_comes_in_as_an_inflow() -> None:
+    h, q = 0.5, 0.3
+    riemann = 2.0 * math.sqrt(GRAVITY_G * h)
+    h_ghost = _root(q, riemann)
+    ghost = _ghost(h, 0.0, 0.1, OPEN_EXCHANGE, 2.0, hllc_flux=-0.1, received=q)
+    assert ghost == pytest.approx((h_ghost, -q, 0.0, -q), rel=1e-4)
+
+
+def test_received_water_reaches_a_dry_cell() -> None:
+    assert _ghost(0.0, 0.0, 0.0, OPEN_EXCHANGE, 0.0, hllc_flux=0.0, received=0.2)[3] == (
+        pytest.approx(-0.2, rel=1e-6)
+    )
+
+
+def test_an_edge_can_pass_water_out_while_it_receives() -> None:
+    ghost = _ghost(2.0, 0.0, 0.0, OPEN_EXCHANGE, 1.0, hllc_flux=0.5, received=0.2)
+    assert ghost[3] == pytest.approx(0.3, rel=1e-6)
+
+
+def test_exchange_never_draws_more_than_it_received() -> None:
+    assert _ghost(1.0, 0.0, 0.0, OPEN_EXCHANGE, 0.5, hllc_flux=-0.4, received=0.1)[3] == (
+        pytest.approx(-0.1, rel=1e-6)
+    )
+
+
+def test_a_stage_ignores_the_received_word() -> None:
+    assert _ghost(1.0, 0.0, 0.0, OPEN_STAGE, 2.0, hllc_flux=-0.7, received=0.3)[3] == (
+        pytest.approx(-0.7, rel=1e-6)
+    )
 
 
 def test_a_stage_cannot_reach_a_supercritical_outflow() -> None:

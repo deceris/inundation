@@ -125,8 +125,8 @@ def _pc_cfl_gather(nc: int, cfl: float) -> list[float]:
 # Flag words per block in the active-set buffer: wet, active, forced.
 _BLOCK_FLAG_WORDS = 3
 _BLOCK_FORCED = 2
-# Words per open edge (OPEN_WORDS in the shaders): condition, value.
-_OPEN_WORDS = 2
+# Words per open edge (OPEN_WORDS in the shaders): condition, value, received.
+_OPEN_WORDS = 3
 # Words per stretch of the tally: out (hi, lo), in (hi, lo).
 _TALLY_WORDS = 4
 _DILATE_WORKGROUP = 64
@@ -193,6 +193,7 @@ class SWESolverGpuResidentBatch(SWESolver):
         self.n_open = int(open_edges.size)
         open_cell_r[open_edges] = -2 - np.arange(self.n_open, dtype=np.int32)
         self._open_cells = geom.edge_cellL[order][open_edges]
+        self._open_edges = open_edges
         sorted_geom = dataclasses.replace(
             geom,
             edge_len=geom.edge_len[order],
@@ -204,6 +205,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             edge_cellR=open_cell_r,
         )
         super()._build_tensors(sorted_geom, h0, hu0, hv0, n0)
+        self._edge_steps = np.column_stack([sorted_geom.edge_dzL, sorted_geom.edge_dzR]).ravel()
         # dt slot 0: this step's dt; slot 1: next step's CFL bound (atomicMin).
         if self._all_tensors[_DT_BINDING] is not self.t_dtbuf:
             raise RuntimeError("base tensor layout changed: dt is no longer binding 17")
@@ -260,7 +262,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             *self._gather_extra,
             *self._comp_extra,
         ]
-        # Open edges: (condition, value) words per edge, read where the update
+        # Open edges: (condition, value, received) words per edge, read where the update
         # kernels read the clamp mass, and each stretch's edges and tally. Kompute
         # rejects empty tensors: pad a mesh with no open edges.
         n_stretches = len(self._open_stretches)
@@ -463,23 +465,47 @@ class SWESolverGpuResidentBatch(SWESolver):
         self._set_tensor_host_data(self.t_tally, np.zeros(self.t_tally.size(), dtype=np.float32))
         self._mgr.sequence().record(kp.OpTensorSyncDevice([*self._comp_extra, self.t_tally])).eval()
 
-    def set_open_conditions(self, kinds: NDArray[np.uint32], values: NDArray[np.float32]) -> None:
+    def set_open_steps(self, steps: NDArray[np.float32]) -> None:
+        """Raise each open edge's face above the cell's bed, in stretch order.
+
+        An exchange edge's ghost stands on the cell's bed, so its face sits where the
+        neighbour's bed is higher: only the depth over that crest crosses.
+        """
+        if steps.size != self.n_open:
+            raise ValueError(f"expected {self.n_open} open edges, got {steps.size} steps")
+        self._edge_steps[2 * self._open_edges] = steps
+        self._edge_steps[2 * self._open_edges + 1] = steps
+        self._set_tensor_host_data(self.t_edz, self._edge_steps)
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_edz])).eval()
+
+    def set_open_conditions(
+        self,
+        kinds: NDArray[np.uint32],
+        values: NDArray[np.float32],
+        received: NDArray[np.float32] | None = None,
+    ) -> None:
         """Set every open edge's condition, in stretch order, before a run or a phase.
 
+        ``received`` is the discharge per unit width each exchange edge takes in.
         A block with an edge that can bring water in from outside stays active
         for as long as these conditions hold.
         """
-        if kinds.size != self.n_open or values.size != self.n_open:
+        if received is None:
+            received = np.zeros(self.n_open, dtype=np.float32)
+        if not kinds.size == values.size == received.size == self.n_open:
             raise ValueError(
-                f"expected {self.n_open} open edges, got {kinds.size} kinds and "
-                f"{values.size} values"
+                f"expected {self.n_open} open edges, got {kinds.size} kinds, "
+                f"{values.size} values and {received.size} received"
             )
         words = np.empty(_OPEN_WORDS * self.n_open, dtype=np.uint32)
-        words[0::2] = kinds
-        words[1::2] = values.astype(np.float32).view(np.uint32)
+        words[0::_OPEN_WORDS] = kinds
+        words[1::_OPEN_WORDS] = values.astype(np.float32).view(np.uint32)
+        words[2::_OPEN_WORDS] = received.astype(np.float32).view(np.uint32)
         self._set_tensor_host_data(self.t_open, _f32_bits(words))
 
-        brings_water = np.isin(kinds, (OPEN_INFLOW, OPEN_STAGE)) & (values > 0.0)
+        brings_water = (np.isin(kinds, (OPEN_INFLOW, OPEN_STAGE)) & (values > 0.0)) | (
+            received > 0.0
+        )
         flags = np.zeros(_BLOCK_FLAG_WORDS * self.n_blocks, dtype=np.uint32)
         forced = self._open_cells[brings_water] // ACTIVE_BLOCK_CELLS
         flags[_BLOCK_FLAG_WORDS * forced + _BLOCK_FORCED] = 1

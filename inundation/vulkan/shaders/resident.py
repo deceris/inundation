@@ -31,7 +31,8 @@ Open boundaries: ``ecR[e] == -1`` is a wall and ``ecR[e] == -2 - k`` is open edg
 ``k``, whose condition is in binding 19 of the kernels that build its ghost state.
 An open edge always writes its gather words, so an update can read it without
 repeating the flux's dry test. ``TALLY_RESIDENT_GLSL`` measures the volume through
-each stretch. See ``docs/implementation/29-open-boundaries/plan.md``.
+each stretch. See ``docs/implementation/29-open-boundaries/plan.md`` and, for
+``OPEN_EXCHANGE``, ``docs/implementation/30-two-way-coupling/plan.md``.
 
 Accumulation: the ``*_GATHER_GLSL`` kernels replace the float ``atomicAdd`` of
 fluxes and CFL terms with per-edge writes and a fixed-order per-cell sum, so
@@ -103,26 +104,35 @@ const uint EF_CFL = 5u;
 """
 
 # Open edges: the ghost state beyond edge ``-2 - cR`` and its mass flux. A
-# boundary edge's bed steps are zero, so the ghost needs no reconstruction. Words
-# per edge: condition, then its value (see the docstring of ``open_ghost``).
+# boundary edge's bed steps are zero, except below a higher neighbour's bed, where
+# the ghost is reconstructed to it like the cell (``set_open_steps``). Words per
+# edge: condition, its value and the discharge per unit width an exchange edge
+# receives (see the docstring of ``open_ghost``).
 _OPEN_BINDINGS = """\
 layout(set=0, binding=19) buffer OPEN   { uint open_u[]; };
 """
 
 _OPEN_GHOST_GLSL = """\
-const uint OPEN_WORDS = 2u;
+const uint OPEN_WORDS = 3u;
 const uint OPEN_WALL = 0u;
 const uint OPEN_FREE = 1u;
 const uint OPEN_NORMAL = 2u;
 const uint OPEN_STAGE = 3u;
 const uint OPEN_INFLOW = 4u;
+const uint OPEN_EXCHANGE = 5u;
 const uint OPEN_NEWTON_STEPS = 4u;
 
 uint open_kind(int cR) { return open_u[OPEN_WORDS * uint(-2 - cR)]; }
 float open_value(int cR) { return uintBitsToFloat(open_u[OPEN_WORDS * uint(-2 - cR) + 1u]); }
 
 // Inflow keeps its edge live while dry, or its volume would be lost.
-bool open_forced(int cR) { return cR < -1 && open_kind(cR) == OPEN_INFLOW && open_value(cR) > 0.0; }
+float open_received(int cR) { return uintBitsToFloat(open_u[OPEN_WORDS * uint(-2 - cR) + 2u]); }
+bool open_forced(int cR) {
+    if (cR >= -1) { return false; }
+    uint kind = open_kind(cR);
+    return (kind == OPEN_INFLOW && open_value(cR) > 0.0)
+        || (kind == OPEN_EXCHANGE && open_received(cR) > 0.0);
+}
 
 // Depth beyond an inflow edge of discharge q per unit width: the root of
 // -q/hG + 2 sqrt(g hG) = unL + 2 cL, the outgoing characteristic. Solved in
@@ -141,7 +151,9 @@ float inflow_depth(float q, float riemann) {
 
 // The state beyond an open edge, from the cell inside it. The value word is
 // sqrt(S)/n for OPEN_NORMAL, the depth over this cell's bed for OPEN_STAGE and
-// the discharge per unit width for OPEN_INFLOW.
+// OPEN_EXCHANGE, and the discharge per unit width for OPEN_INFLOW. An exchange edge
+// is a stage while the neighbour's level is lower, and otherwise an inflow of what
+// it received, or a wall: a level above the cell must not push on it.
 void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
                 out float hG, out float huG, out float hvG)
 {
@@ -154,11 +166,12 @@ void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
     float cL = sqrt(pc.g * max(hL, 0.0));
     float un = -unL;
     hG = hL;
+    float inflow = kind == OPEN_INFLOW ? value : (kind == OPEN_EXCHANGE ? open_received(cR) : 0.0);
     if (kind == OPEN_FREE) {
         un = abs(unL);
     } else if (kind == OPEN_NORMAL) {
         un = value * pow(max(hL, 0.0), 2.0 / 3.0);
-    } else if (kind == OPEN_STAGE) {
+    } else if (kind == OPEN_STAGE || (kind == OPEN_EXCHANGE && value < hL)) {
         // A level cannot reach a boundary against supercritical outflow.
         if (hL < pc.dry_tol || unL < cL) {
             hG = value;
@@ -166,9 +179,9 @@ void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
         } else {
             un = unL;
         }
-    } else if (kind == OPEN_INFLOW && value > 0.0) {
-        hG = inflow_depth(value, unL + 2.0 * cL);
-        un = -value / hG;
+    } else if (inflow > 0.0) {
+        hG = inflow_depth(inflow, unL + 2.0 * cL);
+        un = -inflow / hG;
         ut = 0.0;
     }
     huG = hG * (un * nx_ - ut * ny_);
@@ -176,13 +189,15 @@ void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
 }
 
 // Mass flux through a boundary edge: a wall passes none, as FLUX_GLSL explains;
-// outflow conditions never draw water in; inflow carries exactly its discharge.
+// outflow conditions never draw water in; inflow carries exactly its discharge,
+// and an exchange edge carries what it received on top of what leaves.
 float boundary_mass_flux(int cR, float Fh) {
     if (cR == -1) { return 0.0; }
     uint kind = open_kind(cR);
     if (kind == OPEN_FREE || kind == OPEN_NORMAL) { return max(Fh, 0.0); }
     if (kind == OPEN_STAGE) { return Fh; }
     if (kind == OPEN_INFLOW) { return -open_value(cR); }
+    if (kind == OPEN_EXCHANGE) { return max(Fh, 0.0) - open_received(cR); }
     return 0.0;
 }
 """
