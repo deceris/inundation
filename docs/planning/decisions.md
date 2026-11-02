@@ -279,3 +279,21 @@ not hold it, blew up at a 60 s window and still created water at 1 s. Exchanging
 step was rejected because it ties basins to one time step and rules out separate GPUs.
 Design and results:
 [`30-two-way-coupling/`](../implementation/30-two-way-coupling/results.md).
+
+## Basins run in processes, and splitting is for size, not speed
+
+A step costs about 0.4 ms however small the mesh and each wet basin keeps its own steps,
+so basins in sequence are slower than one mesh: 1.5 times at 7 basins on Nysa and 2.9
+at 29. Threads gain nothing because `kp` holds the interpreter lock. A process per basin
+brings that to about 1.1 and 1.8 times, with identical results, so `run_coupled` offers
+it. Splitting stays the way to reach areas one mesh cannot hold, or several GPUs. It is
+not a speed-up on one GPU.
+
+## Basin exchange gates: 2 s window, RMS 1 %, largest cell 3 %
+
+The proposed largest-cell gate of 1 % measured front lag, which follows the window: Ritter
+is 11.9 % at 10 s and 1.1 % at 1 s. The gate now fixes the window and adds RMS. The 60 s
+default stays for real runs, where the end state barely depends on the window, and
+fronts arrive late across borders.
+Evidence:
+[`30-two-way-coupling/`](../implementation/30-two-way-coupling/results.md).

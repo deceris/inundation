@@ -24,9 +24,9 @@ away, and the compensated depth pair keeps them
 
 ## Two-way coupling
 
-[Effort 30](../implementation/30-two-way-coupling/plan.md) is in progress: separate basin
-meshes that pass water both ways across a shared border, so backwater can cross a cut.
-[Effort 29](../implementation/29-open-boundaries/results.md) built the one-way exchange.
+[Effort 30](../implementation/30-two-way-coupling/results.md) is done: separate basin meshes
+pass water both ways, in a process each. Next is running them on separate GPUs, which is
+where a split could save time.
 
 ## Invariants
 

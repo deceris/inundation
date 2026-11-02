@@ -1,6 +1,6 @@
 # Two-Way Basin Coupling — Plan
 
-**Status: approved, step 1 done, steps 2 to 4 in progress, see [results.md](results.md).**
+**Status: done, see [results.md](results.md).**
 The figures under What was tried come from a throwaway prototype on a patched copy of the
 package. Measured results on the real code are in the results. Follows
 [effort 29](../29-open-boundaries/results.md).
@@ -138,9 +138,10 @@ Stop and report after each.
 
 1. Done. `OPEN_EXCHANGE`, per-edge volumes and tests, with a two-basin driver. Churn
    settled by measurement.
-2. The splitting step, from a pavé mesh and catchment polygons to basin meshes and links.
-3. `run_coupled` over any number of basins, the new suite, and three basins.
-4. The Nysa split, which answers whether this scales.
+2. Done. The splitting step, from a pavé mesh and catchment polygons to basin meshes and
+   links.
+3. Done. `run_coupled` over any number of basins, the new suite, and three basins.
+4. Done. The Nysa split, which answers whether this scales.
 
 ## Needed from the mesher
 
