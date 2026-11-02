@@ -9,12 +9,14 @@ exchange gets wrong, or the failure that sank an earlier scheme: see
 from __future__ import annotations
 
 import dataclasses
+import os
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
 import shapely
 
+from inundation import coupling
 from inundation.bench.open_boundary import Channel, _write_mesh
 from inundation.coupling import Basin, CoupledResult, run_coupled
 from inundation.mesh.split import BasinLink, split_mesh
@@ -135,7 +137,7 @@ def _by_x(x: NDArray[np.float64], h: NDArray[np.float64]) -> NDArray[np.float64]
 def _coupled_depth(result: CoupledResult) -> NDArray[np.float64]:
     xs, hs = [], []
     for basin in result.basins:
-        xs.append(basin.workflow.geom.world_centroid[:, 0].astype(np.float64))
+        xs.append(basin.world_centroid[:, 0])
         hs.append(basin.h_final)
     return _by_x(np.concatenate(xs), np.concatenate(hs))
 
@@ -157,7 +159,7 @@ def test_a_lake_stays_at_rest_across_the_border(tmp_path: Path) -> None:
     ]
     result = run_two_basins(bases[0], bases[1], _border(), WINDOW_S)
     for basin in result.basins:
-        x = basin.workflow.geom.world_centroid[:, 0].astype(np.float64)
+        x = basin.world_centroid[:, 0]
         assert np.abs(basin.h_final + _sloped(x) - level).max() < 1e-4
     assert result.exchanged_m3 < BALANCE * result.volume_stored_m3
 
@@ -272,7 +274,7 @@ def test_water_crosses_a_bed_step_as_in_one_channel(
         WINDOW_S,
     )
     _assert_clean(result)
-    assert np.abs(_coupled_depth(result) - control).max() < 0.02
+    assert np.abs(_coupled_depth(result) - control).max() < 0.012
 
 
 def test_a_trickle_too_thin_to_wet_a_cell_still_arrives(tmp_path: Path) -> None:
@@ -420,9 +422,7 @@ def test_two_basins_flow_into_a_third(tmp_path: Path) -> None:
     result = run_coupled(basins, split.links, WINDOW_S)
     _assert_clean(result)
     got = np.concatenate([basin.h_final for basin in result.basins])
-    at = np.concatenate(
-        [basin.workflow.geom.world_centroid.astype(np.float64) for basin in result.basins]
-    )
+    at = np.concatenate([basin.world_centroid for basin in result.basins])
     order = np.lexsort((at[:, 1], at[:, 0]))
     assert np.abs(got[order] - expected).max() < 0.05 * expected.max()
 
@@ -434,3 +434,55 @@ def _plain_depth(config: WorkflowConfig, phases: Sequence[SimulationPhase]) -> N
     h = workflow.run(phases).h_final.astype(np.float64)
     at = workflow.geom.world_centroid.astype(np.float64)
     return h[np.lexsort((at[:, 1], at[:, 0]))]
+
+
+def test_processes_give_the_same_answer_bit_for_bit(tmp_path: Path) -> None:
+    _, upper, lower = _channels(_sloped)
+    up = upper.end(0.0, "up")
+
+    def run(processes: bool) -> CoupledResult:
+        return run_coupled(
+            [
+                Basin(
+                    _config(tmp_path, "upper", upper, [up]),
+                    [SimulationPhase(60.0, [], {"up": Inflow(30.0, SLOPE)})],
+                ),
+                Basin(_config(tmp_path, "lower", lower, ()), [SimulationPhase(60.0, [])]),
+            ],
+            [BasinLink(0, 1, _border())],
+            WINDOW_S,
+            processes=processes,
+        )
+
+    here, there = run(processes=False), run(processes=True)
+    for a, b in zip(here.basins, there.basins, strict=True):
+        assert a.h_final.tobytes() == b.h_final.tobytes()
+        assert a.passed_m3.tobytes() == b.passed_m3.tobytes()
+        assert a.steps_total == b.steps_total
+    assert here.balance_gap_m3 == there.balance_gap_m3
+
+
+def test_an_error_in_a_process_reaches_the_caller(tmp_path: Path) -> None:
+    _, upper, lower = _channels(_sloped)
+    bad = np.array([[500.0, 0.0, 500.0, 25.0]])
+    basins = [
+        Basin(_config(tmp_path, name, channel, ()), [SimulationPhase(20.0, [])])
+        for name, channel in (("upper", upper), ("lower", lower))
+    ]
+    with pytest.raises(ValueError, match="match no boundary edge"):
+        run_coupled(basins, [BasinLink(0, 1, bad)], WINDOW_S, processes=True)
+
+
+def _die(*_: object) -> None:
+    os._exit(3)
+
+
+def test_a_process_that_dies_fails_the_run_and_does_not_hang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child that dies before it answers: the parent must notice, not wait for ever."""
+    monkeypatch.setattr(coupling, "_serve", _die)
+    _, upper, _ = _channels(_sloped)
+    basin = Basin(_config(tmp_path, "upper", upper, ()), [SimulationPhase(20.0, [])])
+    with pytest.raises(RuntimeError, match="died with exit code 3"):
+        run_coupled([basin], [], WINDOW_S, processes=True)

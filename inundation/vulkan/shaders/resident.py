@@ -127,6 +127,9 @@ float open_value(int cR) { return uintBitsToFloat(open_u[OPEN_WORDS * uint(-2 - 
 
 // Inflow keeps its edge live while dry, or its volume would be lost.
 float open_received(int cR) { return uintBitsToFloat(open_u[OPEN_WORDS * uint(-2 - cR) + 2u]); }
+bool open_received_here(int cR, float hL) {
+    return open_kind(cR) == OPEN_EXCHANGE && open_received(cR) > 0.0 && open_value(cR) >= hL;
+}
 bool open_forced(int cR) {
     if (cR >= -1) { return false; }
     uint kind = open_kind(cR);
@@ -238,6 +241,12 @@ _FLUX_GHOST_GATHER = """\
         }
         return;
     }
+"""
+
+# Water arriving over a crest falls past it, so its momentum reaches the cell below:
+# clipped to the crest, the ghost would hand over none.
+_FLUX_STEP_GATHER = """\
+    if (cR < -1 && open_received_here(cR, hL)) { dzL = 0.0; dzR = 0.0; }
 """
 
 _FLUX_MASS_ATOMIC = """\
@@ -352,6 +361,9 @@ void main() {
         + """
     float dzL = edz[2u * eid];
     float dzR = edz[2u * eid + 1u];
+"""
+        + (_FLUX_STEP_GATHER if gather else "")
+        + """
     float hLs, hqnL, hqtL, hRs, hqnR, hqtR;
     face_states(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_,
                 hLs, hqnL, hqtL, hRs, hqnR, hqtR);

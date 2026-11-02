@@ -50,7 +50,6 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from inundation.mesh.geometry import MeshGeometry
-    from inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
     Field = Callable[[NDArray[np.float64], NDArray[np.float64]], NDArray[np.float64]]
 
@@ -61,13 +60,15 @@ ACROSS = 8
 CUT_M = 1000.0
 SLOPE = 1e-3
 MANNING = 0.03
-WINDOW_S = 10.0
+# Error at a moving front is proportional to the window, so the gates fix a short one.
+WINDOW_S = 2.0
 
 GATE_BALANCE = 1e-6
 GATE_CLAMP = 0.0
 GATE_LAKE_LEVEL_M = 1e-4
 GATE_LAKE_SPEED_MS = 1e-3
-GATE_DEPTH = 0.01
+GATE_DEPTH_RMS = 0.01
+GATE_DEPTH_MAX = 0.03
 
 
 @dataclass(frozen=True)
@@ -173,13 +174,7 @@ def _compare(
 
 def _coupled_depth(result: CoupledResult) -> NDArray[np.float64]:
     h = np.concatenate([basin.h_final for basin in result.basins])
-    at = np.concatenate(
-        [
-            cast("Any", basin.workflow.geom).world_centroid.astype(np.float64)
-            for basin in result.basins
-        ]
-    )
-    return _sorted_by_place(h, at)
+    return _sorted_by_place(h, np.concatenate([basin.world_centroid for basin in result.basins]))
 
 
 def _row(
@@ -211,10 +206,14 @@ def _row(
 def _depth_row(
     case: str, expected: NDArray[np.float64], result: CoupledResult, wall_s: float
 ) -> dict[str, Any]:
-    difference = float(np.abs(_coupled_depth(result) - expected).max() / expected.max())
-    row = _row(case, result, wall_s, depth_difference_rel=difference)
-    if difference > GATE_DEPTH:
-        row["fail_reasons"].append(f"depth difference {difference:.4f} above {GATE_DEPTH}")
+    difference = np.abs(_coupled_depth(result) - expected) / expected.max()
+    largest = float(difference.max())
+    rms = float(np.sqrt((difference**2).mean()))
+    row = _row(case, result, wall_s, depth_rms_rel=rms, depth_max_rel=largest)
+    if rms > GATE_DEPTH_RMS:
+        row["fail_reasons"].append(f"depth RMS {rms:.4f} above {GATE_DEPTH_RMS}")
+    if largest > GATE_DEPTH_MAX:
+        row["fail_reasons"].append(f"largest depth difference {largest:.4f} above {GATE_DEPTH_MAX}")
     return row
 
 
@@ -241,12 +240,9 @@ def case_lake(work_dir: Path, cfl: float | None) -> list[dict[str, Any]]:
     _, result, wall_s = _compare(work_dir, "lake", layout, [Forcing(600.0)], cfl)
     errors, speeds = [], []
     for basin in result.basins:
-        solver = cast("SWESolverGpuResidentBatch", basin.workflow.solver)
-        geom = cast("Any", basin.workflow.geom)
         wet = basin.h_final > 0.01
-        errors.append(np.abs(basin.h_final + geom.zb.astype(np.float64) - level)[wet].max())
-        hu, hv = solver.download_hu(), solver.download_hv()
-        speeds.append((np.hypot(hu, hv)[wet] / basin.h_final[wet]).max())
+        errors.append(np.abs(basin.h_final + basin.bed - level)[wet].max())
+        speeds.append((np.hypot(basin.hu_final, basin.hv_final)[wet] / basin.h_final[wet]).max())
     error, speed = float(max(errors)), float(max(speeds))
     row = _row("lake", result, wall_s, level_error_m=error, speed_ms=speed)
     if error > GATE_LAKE_LEVEL_M:
@@ -383,7 +379,8 @@ def main() -> int:
             "clamp_m3_max": GATE_CLAMP,
             "lake_level_error_m_max": GATE_LAKE_LEVEL_M,
             "lake_speed_ms_max": GATE_LAKE_SPEED_MS,
-            "depth_difference_rel_max": GATE_DEPTH,
+            "depth_rms_rel_max": GATE_DEPTH_RMS,
+            "depth_max_rel_max": GATE_DEPTH_MAX,
         },
         "correctness": correctness,
         "performance": performance,

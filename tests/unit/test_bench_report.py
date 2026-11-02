@@ -141,6 +141,10 @@ def test_open_boundaries_are_a_gate() -> None:
     assert "open_boundary" in {spec.name for spec in SUITES}
 
 
+def test_basin_exchange_is_a_gate() -> None:
+    assert "basin_exchange" in {spec.name for spec in SUITES}
+
+
 @pytest.mark.parametrize("spec", SUITES, ids=lambda spec: spec.name)
 def test_every_suite_accepts_the_arguments_the_report_passes(spec: SuiteSpec) -> None:
     # argparse names every unknown argument and exits before any suite starts.

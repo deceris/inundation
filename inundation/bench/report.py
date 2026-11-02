@@ -137,6 +137,21 @@ SUITES: tuple[SuiteSpec, ...] = (
         gif_args=(),
     ),
     SuiteSpec(
+        name="basin_exchange",
+        module="inundation.bench.basin_exchange",
+        title="Basin exchange (water both ways between meshes)",
+        description=(
+            "Purpose: basins on separate meshes against one mesh over the same area.\n"
+            "Setup: straight channels cut in two, and a plain cut in three. A lake across a "
+            "border, a dam break through it, M1 backwater, flow reversing, a bed step at the "
+            "border and a confluence.\n"
+            "Forcing and runtime: discharge inflow, stage and point sources, 2 s windows.\n"
+            "Validation: depth against one mesh, level and speed at rest, system balance, "
+            "clamp mass, and determinism."
+        ),
+        gif_args=(),
+    ),
+    SuiteSpec(
         name="open_boundary",
         module="inundation.bench.open_boundary",
         title="Open boundaries (analytical cases and basin exchange)",
