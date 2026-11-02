@@ -267,3 +267,15 @@ Backwater cannot cross a cut until the two-way effort that follows. A stretch-wi
 full curve needs a new reduction on the device. Stretches are lines in the run config, so
 nothing waits on the mesher. Design:
 [`29-open-boundaries/`](../implementation/29-open-boundaries/plan.md).
+
+## Two-way coupling: basins pass water out only, at each other's level
+
+A wider catchment cannot run as one joined mesh, so basins stay separate meshes, cut from
+one pavé run along catchment borders. At each shared edge both basins see the other's
+level, and a basin can only pass water out. The measured volume reaches the neighbour
+through that edge the next window, with momentum. Border faces sit at the higher bed, as
+in one mesh. Exchanging a signed flux was rejected: it takes water from cells that may
+not hold it, blew up at a 60 s window and still created water at 1 s. Exchanging every
+step was rejected because it ties basins to one time step and rules out separate GPUs.
+Design and results:
+[`30-two-way-coupling/`](../implementation/30-two-way-coupling/results.md).

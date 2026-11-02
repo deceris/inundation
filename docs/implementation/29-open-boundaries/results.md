@@ -134,11 +134,63 @@ real parser those arguments. This is why the suite has determinism at all.
   window turned out to set the error.
 - The real run is 72 h, for the reason above.
 
+## Real catchment pairs
+
+Two touching MPHP pairs on the Nysa DEM, on `f609715`, as `~/projects/deceris/mphp`
+holds them. Each pair ran clipped to its union outline as the control, then as two
+basins exchanging across their shared edge through `inflow_phases`, with a 60 s window.
+Both ran 8 h with a 1 h ramp.
+
+Direction comes from the Shreve field `shr` in the MPHP stream segments, not only
+from the names: Cielnica goes 10 to 15 where Korzkiew (5) joins, and Jasionka (2) and
+Młynówka Bielicka (4) make 6.
+
+The forcing is assumed, about 0.2 m³/s per km² of the upstream area, and Manning n
+is a uniform 0.04. Neither pair is a headwater: 142 km² drains into Cielnica's 3.7.
+
+| | Cielnica | Jasionka |
+| --- | --- | --- |
+| Mesh verdict | OK | OK |
+| Cells, rectangle / outline | 13 839 / 5 794 | 10 885 / 4 412 |
+| Inflow | 20 m³/s inlet, 10 m³/s Korzkiew | 3 m³/s inlet, 10 m³/s Młynówka |
+| Control steps | 145 197 | 121 056 |
+| Two-basin steps, upper + lower | 115 759 + 144 724 | 32 575 + 121 646 |
+| Control wall time | 83 s | 72 s |
+| Largest balance gap, share of volume in | 2.8e-8 | 2.9e-8 |
+| Clamp mass | 0 | 0 |
+| Volume passed = volume received | yes | yes |
+| Lower basin depth against control, RMS | 1.6 cm | 2.0 cm |
+| Upper basin depth against control, RMS | 19 cm | 18 cm |
+| Largest depth difference | 0.98 m | 1.17 m |
+| Outflow at 7-8 h, control / two-basin | 27.0 / 27.2 m³/s | 10.0 / 10.9 m³/s |
+| Across the cut over 8 h, control / two-basin | 446 667 / 455 779 m³ | −676 / 13 797 m³ |
+
+Mass passes and the lower basin is right when the flow really does go downstream. The
+error is backwater. A cut outflow at normal depth draws the upper basin down, because
+the level below the cut cannot reach it. In Cielnica this fades out by 600 m.
+
+Jasionka fails in two places. At the confluence the Młynówka backs up across the cut,
+and the one-way run leaves that side dry. At the east end a pond at 171.5 m sits across
+the shared edge, so almost nothing crosses in the control. The one-way run drains that
+pond through the cut, and the conveyance split then puts the water back at the river,
+500 m from where it left. A single discharge for a whole cut cannot say where the
+water crossed.
+
+MPHP catchments end at confluences, so a river crosses their shared edge at a junction
+by construction. That is the worst place for one-way exchange, so two-way coupling is
+needed for these meshes, not only an improvement.
+
+The mesh limited but did not block either run. The time step is set by small patch
+cells where water is deep: 18 m² and 1.3 m deep in Cielnica, 50 m² and 1.8 m deep in
+Jasionka. That gives a mean of 0.20 and 0.24 s.
+
+The outline is a stair-stepped wall away from the open stretches. In Cielnica 2.6 km of
+it is wet at the end, 1.4 km deeper than 0.5 m, so a real flood would cross it there.
+
 ## Limits
 
 - Boundaries are one-way between basins. Water cannot come back through a cut.
-- `inflow_phases` has only run on channels. No real pair of Nysa basins has been cut
-  and run, and only `NormalDepth` and `Wall` have run on the real mesh.
+- `FreeOutflow` and `Stage` have not run on a real mesh.
 - A basin that stays dry until its inflow arrives pays for it. It steps at `dt_init`,
   0.01 s, until first water, which cost about 330 000 steps in the lower basin of the
   two-basin case. Results are not harmed.
