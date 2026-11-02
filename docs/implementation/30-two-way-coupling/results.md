@@ -1,9 +1,10 @@
 # Two-Way Basin Coupling — Results
 
-**Status: step 1 done.** Two basins on separate meshes pass water both ways across a
-shared border, through `run_two_basins` in `inundation/coupling.py`. Steps 2 to 4 of the
-[plan](plan.md) have not started: the splitting step, more than two basins, and the Nysa
-split.
+**Status: step 1 done, steps 2 and 3 in code, step 4 running.** Basins on separate meshes
+pass water both ways across shared borders, through `run_coupled` in
+`inundation/coupling.py`. `inundation/mesh/split.py` cuts one mesh along catchment
+polygons. The figures below up to Limits were measured on `run_two_basins`, the two-basin
+driver `run_coupled` replaced, and have not been rerun on it.
 
 All figures are from MoltenVK on the local machine, on code that is not committed yet.
 The base is `f609715`.
@@ -139,6 +140,33 @@ wet a cell, and without the guard that volume is lost. A test now covers it.
 - The balance report does not check that inward flow on an exchange edge is 0. A device
   probe test covers it directly, in `tests/unit/test_gpu_open_ghost.py`.
 - The driver takes two basins. `run_coupled` over any number is step 3.
+
+## Steps 2 and 3, in progress
+
+Splitting takes about 23 s on the 2 339 765 cell Nysa mesh and keeps every cell. MPHP level
+3 gives 7 basins and 11 228 border edges, level 4 gives 29 and 33 198. Border edges are now
+found by an exact lookup, and a dry basin that nothing reaches is not run.
+
+`inundation/bench/basin_exchange.py` runs every case whole and split. **4 of its 8 cases
+miss the proposed depth gate of 1 %**, so it is not in the report yet:
+
+| Case | Largest depth difference, share of the deepest | Gate |
+| --- | --- | --- |
+| Lake at rest | Level and speed at rounding | Pass |
+| Backwater | 0.45 % | Pass |
+| Up over a crest, down over a crest | 0.20 % each | Pass |
+| Reversal | 1.1 % | Fail |
+| Confluence of three | 3.9 % | Fail |
+| Down a step | 5.3 % | Fail |
+| Ritter | 11.9 % | Fail |
+
+These are single worst cells at a 10 s window. Whether they are front lag or a defect has
+not been traced, and the gate was not changed. Balance is within 1e-6, clamp mass is 0
+and repeats are identical in all 8.
+
+On Nysa the 24 h flood never reaches a border at level 3, so that split passed 0 m³ and
+measures overhead only: 852 s against 572 s for one mesh, in a single run, with 33 % fewer
+cell-steps. 843 s of it is inside the solver's run calls. The cause has not been measured.
 
 ## Limits
 

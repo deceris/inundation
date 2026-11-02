@@ -1,8 +1,8 @@
 # Two-Way Basin Coupling — Plan
 
-**Status: approved, step 1 done, see [results.md](results.md).** The figures under What
-was tried come from a throwaway prototype on a patched copy of the package. Measured
-results on the real code are in the results. Follows
+**Status: approved, step 1 done, steps 2 to 4 in progress, see [results.md](results.md).**
+The figures under What was tried come from a throwaway prototype on a patched copy of the
+package. Measured results on the real code are in the results. Follows
 [effort 29](../29-open-boundaries/results.md).
 
 ## Goal
