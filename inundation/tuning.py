@@ -68,7 +68,7 @@ OPEN_EXCHANGE = 5
 
 # Two-way coupling (coupling.py); see docs/implementation/30-two-way-coupling/plan.md.
 # A border edge's midpoint lies on its segment, so this only absorbs rounding.
-BORDER_TOLERANCE_M = 1e-3
+BORDER_TOLERANCE_M = 1e-2
 # Weight of a basin's latest level in what its neighbour sees over the next window. At
 # 1.0 the cut discharge on Cielnica swings from -3 to 42 m^3/s around a steady 20.
 BORDER_LEVEL_WEIGHT = 0.5

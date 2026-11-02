@@ -97,6 +97,10 @@ benchmark-bowl *args:
 benchmark-open-boundary *args:
     {{docker_prefix}} uv run python -m inundation.bench.open_boundary {{args}}
 
+# Basin exchange: water both ways between meshes, against one mesh.
+benchmark-basin-exchange *args:
+    {{docker_prefix}} uv run python -m inundation.bench.basin_exchange {{args}}
+
 # Run the benchmark harnesses and fold logs, metrics, and animations into
 # one self-contained HTML report at .tmp/bench-report/report.html.
 benchmark-report *args:

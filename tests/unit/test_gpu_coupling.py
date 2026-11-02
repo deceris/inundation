@@ -8,14 +8,17 @@ exchange gets wrong, or the failure that sank an earlier scheme: see
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
+import shapely
 
 from inundation.bench.open_boundary import Channel, _write_mesh
-from inundation.coupling import Basin, CoupledResult, run_two_basins
-from inundation.tuning import BORDER_TOLERANCE_M, OPEN_EXCHANGE
+from inundation.coupling import Basin, CoupledResult, run_coupled
+from inundation.mesh.split import BasinLink, split_mesh
+from inundation.tuning import OPEN_EXCHANGE
 from inundation.workflow import (
     Inflow,
     NormalDepth,
@@ -59,9 +62,22 @@ def _flat(x: NDArray[np.float64]) -> NDArray[np.float64]:
     return np.full(x.shape, 10.0)
 
 
-def _border() -> list[tuple[tuple[float, float], tuple[float, float]]]:
+def _border() -> NDArray[np.float64]:
     dy = WIDTH_M / ACROSS
-    return [((CUT_M, k * dy), (CUT_M, (k + 1) * dy)) for k in range(ACROSS)]
+    return np.array([[CUT_M, k * dy, CUT_M, (k + 1) * dy] for k in range(ACROSS)])
+
+
+def run_two_basins(
+    first: Basin,
+    second: Basin,
+    border: NDArray[np.float64],
+    window_s: float,
+    *,
+    output_interval_s: float | None = None,
+) -> CoupledResult:
+    return run_coupled(
+        [first, second], [BasinLink(0, 1, border)], window_s, output_interval_s=output_interval_s
+    )
 
 
 def _config(
@@ -118,7 +134,7 @@ def _by_x(x: NDArray[np.float64], h: NDArray[np.float64]) -> NDArray[np.float64]
 
 def _coupled_depth(result: CoupledResult) -> NDArray[np.float64]:
     xs, hs = [], []
-    for basin in (result.first, result.second):
+    for basin in result.basins:
         xs.append(basin.workflow.geom.world_centroid[:, 0].astype(np.float64))
         hs.append(basin.h_final)
     return _by_x(np.concatenate(xs), np.concatenate(hs))
@@ -126,8 +142,7 @@ def _coupled_depth(result: CoupledResult) -> NDArray[np.float64]:
 
 def _assert_clean(result: CoupledResult) -> None:
     assert abs(result.balance_gap_m3) <= BALANCE * (result.volume_start_m3 + result.volume_in_m3)
-    assert result.first.clamp_mass_m3 == 0.0
-    assert result.second.clamp_mass_m3 == 0.0
+    assert all(basin.clamp_mass_m3 == 0.0 for basin in result.basins)
 
 
 def test_a_lake_stays_at_rest_across_the_border(tmp_path: Path) -> None:
@@ -141,7 +156,7 @@ def test_a_lake_stays_at_rest_across_the_border(tmp_path: Path) -> None:
         for name, channel in (("upper", upper), ("lower", lower))
     ]
     result = run_two_basins(bases[0], bases[1], _border(), WINDOW_S)
-    for basin in (result.first, result.second):
+    for basin in result.basins:
         x = basin.workflow.geom.world_centroid[:, 0].astype(np.float64)
         assert np.abs(basin.h_final + _sloped(x) - level).max() < 1e-4
     assert result.exchanged_m3 < BALANCE * result.volume_stored_m3
@@ -208,7 +223,7 @@ def test_water_flows_back_up_across_the_border(tmp_path: Path) -> None:
         WINDOW_S,
     )
     _assert_clean(result)
-    assert result.first.h_final.max() > 0.05
+    assert result.basins[0].h_final.max() > 0.05
     assert np.abs(_coupled_depth(result) - expected).max() < 0.05 * expected.max()
 
 
@@ -227,7 +242,7 @@ def test_a_higher_dry_bed_passes_nothing(tmp_path: Path) -> None:
         WINDOW_S,
     )
     _assert_clean(result)
-    assert result.second.h_final.max() == 0.0
+    assert result.basins[1].h_final.max() == 0.0
     assert result.exchanged_m3 == 0.0
 
 
@@ -264,8 +279,8 @@ def test_a_trickle_too_thin_to_wet_a_cell_still_arrives(tmp_path: Path) -> None:
     """Its ghost is below the dry tolerance, so only the live edge keeps the volume."""
     q = 1e-7
     _, upper, _ = _channels(_flat)
-    segment = OpenBoundary("edge", list(_border()[0]), BORDER_TOLERANCE_M)
-    workflow = SWEWorkflow(_config(tmp_path, "upper", upper, (segment,)))
+    config = _config(tmp_path, "upper", upper, ())
+    workflow = SWEWorkflow(dataclasses.replace(config, border_segments=_border()[:1]))
     workflow.prepare()
     solver = cast("SWESolverGpuResidentBatch", workflow.solver)
     solver.set_open_conditions(
@@ -299,7 +314,7 @@ def test_repeat_runs_are_bit_identical(tmp_path: Path) -> None:
             _border(),
             WINDOW_S,
         )
-        return result.first.h_final.tobytes() + result.second.h_final.tobytes()
+        return result.basins[0].h_final.tobytes() + result.basins[1].h_final.tobytes()
 
     assert run() == run()
 
@@ -318,7 +333,7 @@ def test_snapshots_land_on_output_times(tmp_path: Path) -> None:
         output_interval_s=30.0,
     )
     assert result.snap_times == [30.0, 60.0]
-    assert len(result.first.snapshots) == len(result.second.snapshots) == 2
+    assert len(result.basins[0].snapshots) == len(result.basins[1].snapshots) == 2
 
 
 def test_a_window_that_does_not_divide_a_phase_raises(tmp_path: Path) -> None:
@@ -345,5 +360,77 @@ def test_a_segment_off_one_mesh_raises(tmp_path: Path) -> None:
         Basin(_config(tmp_path, name, channel, ()), [SimulationPhase(20.0, [])])
         for name, channel in (("upper", upper), ("lower", lower))
     ]
-    with pytest.raises(ValueError, match="selects no boundary edges"):
-        run_two_basins(basins[0], basins[1], [((500.0, 0.0), (500.0, 25.0))], WINDOW_S)
+    with pytest.raises(ValueError, match="match no boundary edge"):
+        run_two_basins(basins[0], basins[1], np.array([[500.0, 0.0, 500.0, 25.0]]), WINDOW_S)
+
+
+def test_a_basin_nothing_reaches_is_not_run(tmp_path: Path) -> None:
+    _, upper, lower = _channels(_flat)
+    source = PointSource(1.0, (100.0, 50.0), 30.0)
+    result = run_two_basins(
+        Basin(_config(tmp_path, "upper", upper, ()), [SimulationPhase(30.0, [source])]),
+        Basin(_config(tmp_path, "lower", lower, ()), [SimulationPhase(30.0, [])]),
+        _border(),
+        WINDOW_S,
+    )
+    _assert_clean(result)
+    assert result.basins[0].windows_run == 3
+    assert result.basins[1].windows_run == 0
+
+
+def test_a_late_start_keeps_the_clock_and_the_water(tmp_path: Path) -> None:
+    """The lower basin starts when the flood reaches it, partway through the run."""
+    _, upper, lower = _channels(_sloped)
+    source = PointSource(20.0, (900.0, 50.0), 30.0)
+    result = run_two_basins(
+        Basin(_config(tmp_path, "upper", upper, ()), [SimulationPhase(RUN_S, [source])]),
+        Basin(_config(tmp_path, "lower", lower, ()), [SimulationPhase(RUN_S, [])]),
+        _border(),
+        WINDOW_S,
+    )
+    _assert_clean(result)
+    lower_windows = result.basins[1].windows_run
+    assert 0 < lower_windows < round(RUN_S / WINDOW_S)
+    assert result.basins[1].h_final.max() > 0.0
+
+
+def test_two_basins_flow_into_a_third(tmp_path: Path) -> None:
+    """A confluence: three strips of one flat plain, cut along two lines that meet."""
+    width, height = 300.0, 200.0
+    whole = Channel(width, 30, height, _flat, across=20)
+    source_a = PointSource(5.0, (50.0, 50.0), 20.0)
+    source_b = PointSource(5.0, (50.0, 150.0), 20.0)
+    run = [SimulationPhase(RUN_S, [source_a, source_b])]
+    mesh = tmp_path / "whole.parquet"
+    expected = _plain_depth(_config(tmp_path, "whole", whole, ()), run)
+    _write_mesh(whole, mesh)
+    polygons = [
+        shapely.box(0.0, 0.0, 150.0, 100.0),
+        shapely.box(0.0, 100.0, 150.0, 200.0),
+        shapely.box(150.0, 0.0, 300.0, 200.0),
+    ]
+    split = split_mesh(mesh, polygons, tmp_path / "split")
+    assert [(link.first, link.second) for link in split.links] == [(0, 1), (0, 2), (1, 2)]
+    forcing = [[SimulationPhase(RUN_S, [source_a])], [SimulationPhase(RUN_S, [source_b])]]
+    forcing.append([SimulationPhase(RUN_S, [])])
+    basins = [
+        Basin(dataclasses.replace(_config(tmp_path, "unused", whole, ()), mesh_source=str(path)), f)
+        for path, f in zip(split.meshes, forcing, strict=True)
+    ]
+    result = run_coupled(basins, split.links, WINDOW_S)
+    _assert_clean(result)
+    got = np.concatenate([basin.h_final for basin in result.basins])
+    at = np.concatenate(
+        [basin.workflow.geom.world_centroid.astype(np.float64) for basin in result.basins]
+    )
+    order = np.lexsort((at[:, 1], at[:, 0]))
+    assert np.abs(got[order] - expected).max() < 0.05 * expected.max()
+
+
+def _plain_depth(config: WorkflowConfig, phases: Sequence[SimulationPhase]) -> NDArray[np.float64]:
+    """Depth over a whole mesh, sorted by cell centre as the coupled result is."""
+    workflow = SWEWorkflow(config)
+    workflow.prepare()
+    h = workflow.run(phases).h_final.astype(np.float64)
+    at = workflow.geom.world_centroid.astype(np.float64)
+    return h[np.lexsort((at[:, 1], at[:, 0]))]

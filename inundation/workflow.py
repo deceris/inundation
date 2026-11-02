@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
-from .mesh.boundaries import conveyance_split, select_boundary_edges
+from .mesh.boundaries import conveyance_split, select_boundary_edges, select_boundary_segments
 from .mesh.cache import (
     geometry_cache_key,
     load_geometry_cache,
@@ -25,6 +25,7 @@ from .mesh.cache import (
 from .mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
 from .mesh.loader import load_mesh_file
 from .tuning import (
+    BORDER_TOLERANCE_M,
     DRY_TOL_DEFAULT,
     GRAVITY_G,
     MIN_NDIM_NPY_INPUT,
@@ -177,6 +178,9 @@ class WorkflowConfig:
     # Stretches of boundary that phases can open. gpu_resident_batch only, with
     # deterministic accumulation.
     open_boundaries: Sequence[OpenBoundary] = ()
+    # Segments (K, 4) x0, y0, x1, y1, each one boundary edge and its own stretch, after
+    # open_boundaries. Basin borders, set by the coupling driver.
+    border_segments: NDArray[np.float64] | None = None
     steps_per_graph: int | None = None
     # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
     # instead of float atomics. None keeps the backend default (on).
@@ -374,7 +378,9 @@ def select_cells_within_radius(
 
 
 def _open_stretch_edges(
-    geom: MeshGeometry, boundaries: Sequence[OpenBoundary]
+    geom: MeshGeometry,
+    boundaries: Sequence[OpenBoundary],
+    border_segments: NDArray[np.float64] | None = None,
 ) -> list[NDArray[np.int64]]:
     """Each stretch's boundary edges. A stretch selecting nothing is a mistake, so it raises."""
     stretches = [
@@ -386,6 +392,9 @@ def _open_stretch_edges(
                 f"open boundary {boundary.name!r} selects no boundary edges within "
                 f"{boundary.tolerance_m} m of its line"
             )
+    if border_segments is not None:
+        border = select_boundary_segments(geom, border_segments, BORDER_TOLERANCE_M)
+        stretches += [border[k : k + 1] for k in range(border.size)]
     all_edges = np.concatenate(stretches) if stretches else np.empty(0, dtype=np.int64)
     if np.unique(all_edges).size != all_edges.size:
         raise ValueError("open boundaries select the same edge twice")
@@ -814,7 +823,9 @@ class SWEWorkflow:
             "gpu_resident_batch": SWESolverGpuResidentBatch,
         }
         solver_cls = solver_cls_by_impl[self.config.solver_impl]
-        self._open_stretches = _open_stretch_edges(geom, self.config.open_boundaries)
+        self._open_stretches = _open_stretch_edges(
+            geom, self.config.open_boundaries, self.config.border_segments
+        )
         self._manning = n0
         # WorkflowConfig accepts open boundaries on gpu_resident_batch only.
         open_args: dict[str, Any] = (

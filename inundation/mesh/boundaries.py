@@ -58,6 +58,45 @@ def select_boundary_edges(
     return edges[distance_to_line(midpoints, local) <= tolerance_m]
 
 
+def select_boundary_segments(
+    geom: MeshGeometry, segments: NDArray[np.float64], tolerance_m: float
+) -> NDArray[np.int64]:
+    """The boundary edge at each world-coordinate segment, in order; one is missing: raises.
+
+    Midpoints fall on a grid twice the tolerance, so a match is in one of nine squares.
+    ``tolerance_m`` must be well below half the shortest boundary edge.
+    """
+    edges, midpoints = boundary_edge_midpoints(geom)
+    wanted = 0.5 * (segments[:, :2] + segments[:, 2:]) - geom.origin
+    size = 2.0 * tolerance_m
+    corner = np.minimum(midpoints.min(axis=0), wanted.min(axis=0)) - 2.0 * size
+    width = int(np.ceil((max(midpoints[:, 0].max(), wanted[:, 0].max()) - corner[0]) / size)) + 3
+
+    def square(points: NDArray[np.float64]) -> NDArray[np.int64]:
+        cell = np.floor((points - corner) / size).astype(np.int64)
+        return cell[:, 0] * width + cell[:, 1]
+
+    squares = square(midpoints)
+    order = np.argsort(squares)
+    squares = squares[order]
+    found = np.full(wanted.shape[0], -1, dtype=np.int64)
+    base = square(wanted)
+    for shift in (dx * width + dy for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+        at = np.searchsorted(squares, base + shift)
+        inside = at < squares.size
+        hit = np.zeros(wanted.shape[0], dtype=bool)
+        hit[inside] = squares[at[inside]] == (base + shift)[inside]
+        candidate = order[at[hit]]
+        near = np.hypot(*(midpoints[candidate] - wanted[hit]).T) <= tolerance_m
+        found[np.flatnonzero(hit)[near]] = edges[candidate[near]]
+    if (found < 0).any():
+        raise ValueError(
+            f"{int((found < 0).sum())} of {found.size} segments match no boundary edge "
+            f"within {tolerance_m} m"
+        )
+    return found
+
+
 def conveyance_split(
     discharge_m3s: float,
     lengths: NDArray[np.float32],

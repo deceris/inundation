@@ -722,7 +722,7 @@ class SWESolverGpuResidentBatch(SWESolver):
 
         dt_max_ticks = dt_to_ticks(dt_max)
         dry_dt_ticks = dt_to_ticks(min(dt_init, dt_max))
-        start_ticks = seconds_to_ticks(t_start if resume else 0.0)
+        start_ticks = seconds_to_ticks(t_start)
         end_ticks = seconds_to_ticks(t_end)
         interval_ticks = seconds_to_ticks(output_interval_s)
 
