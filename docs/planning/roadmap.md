@@ -18,8 +18,8 @@ away, and the compensated depth pair keeps them
 
 1. Run the unit and gate suites on the NVIDIA production path, where `precise`
    stays on and the fast-math setting does not apply.
-2. Second-order spatial reconstruction (MUSCL), or forward Euler in place of
-   Heun: the scheme is first order in space with a second-order integrator.
+2. Decide whether MUSCL becomes the default, with a new baseline, and second order at
+   boundaries. [Effort 31](../implementation/31-muscl/results.md) added it as an option.
 3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
 ## Two-way coupling

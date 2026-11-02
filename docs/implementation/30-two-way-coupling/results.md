@@ -119,7 +119,10 @@ The second unfloored Nysa mesh, 1 127 159 steps, was not rerun.
 ## Mutation check
 
 18 mutations of the kernel, solver and driver code, on step 1. 15 are caught by the tests,
-one hangs and two survive. The code added later has not had this check.
+one hangs and two survive. On the later code, 10 more: 8 caught, some only after tests were
+tightened, and 2 survive. "Dead child not noticed" and "late start restarts the clock"
+change nothing, the first because Python closes that pipe end anyway, the second because
+the clock now always follows `t_start`.
 
 - **Hangs: the ledger is not reduced after delivery.** Inflow grows without limit and the
   test never ends. It was stopped at 400 s, and it counts as found, not as caught. The
@@ -168,8 +171,8 @@ Three ideas were tested and ruled out as the cause or the fix. Python's share is
 82 s at 1, 4 and 8, because `kp` holds the interpreter lock. Two separate processes each
 took 99 s against 80 s alone, 1.6 times the work on one GPU, so `run_coupled` runs each
 basin in its own process with `processes=True`. Snapshots of all 2.3 million cells are
-bit-identical to the run in sequence, and a process that dies now fails the run. It first
-hung the parent for ever: the test for that exists because of it.
+bit-identical to the run in sequence, and a process that dies now fails the run with a
+clear error.
 
 Nysa 24 h, wall time:
 

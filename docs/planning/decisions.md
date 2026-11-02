@@ -297,3 +297,13 @@ default stays for real runs, where the end state barely depends on the window, a
 fronts arrive late across borders.
 Evidence:
 [`30-two-way-coupling/`](../implementation/30-two-way-coupling/results.md).
+
+## MUSCL is an option, and first order stays the default
+
+`reconstruction="muscl"` gives measured order 2 on smooth flow, errors 4 to 7 times lower
+on the dam breaks and 5.6 times on the parabolic bowl, at about 1.15 to 1.6 times the wall
+time. It stays opt-in: two `open_boundary` gates fail with it because boundaries stay first
+order, it has not run with coupling, and a new default needs a new baseline. A face more
+than 25 % from its cell's depth keeps the cell's state, because the unlimited scheme
+created 29 % of the volume on a steep bed. Evidence:
+[`31-muscl/`](../implementation/31-muscl/results.md).
