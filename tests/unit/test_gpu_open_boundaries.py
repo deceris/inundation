@@ -171,6 +171,21 @@ def test_flow_running_away_from_an_outlet_draws_nothing_in(tmp_path: Path, down:
     assert result.boundary_volumes_m3["down"][-1, 1] == 0.0
 
 
+def test_an_outlet_that_draws_nothing_in_acts_as_a_wall(tmp_path: Path) -> None:
+    # Water running away from the outlet faster than the normal-depth ghost
+    # leaves: the Riemann flux points inward at every stage of this short run,
+    # so the edge must be a wall for momentum as well as mass. FreeOutflow
+    # cannot show this: away from the face its ghost already is the wall mirror.
+    def run(down: Any) -> WorkflowResult:
+        workflow = _workflow(tmp_path, initial_depth=0.5, initial_velocity=-2.0)
+        return workflow.run([_phase(Wall(), down, 1.0)])
+
+    closed, outlet = run(Wall()), run(NormalDepth(1e-5))
+    assert outlet.hu_final is not None and closed.hu_final is not None
+    assert np.array_equal(outlet.h_final, closed.h_final)
+    assert np.array_equal(outlet.hu_final, closed.hu_final)
+
+
 def test_a_dry_outflow_passes_nothing(tmp_path: Path) -> None:
     result = _workflow(tmp_path).run([_phase(Wall(), FreeOutflow())])
     assert not result.boundary_volumes_m3["down"].any()

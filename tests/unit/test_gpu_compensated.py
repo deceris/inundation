@@ -1,11 +1,11 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false
 """GPU-resident compensated depth (needs Vulkan).
 
-With ``compensated`` on, each cell's depth is an exact float32 pair and every
-update goes through an error-free transform, so the only non-conservative
-operation left is the positivity clamp. On a closed domain the volume change
-must then equal the clamp mass plus the injected volume to float64 rounding,
-where the plain float32 update drifts by a measurable amount.
+With ``compensated`` on, each cell's depth is a compensated float32 pair
+updated through two-sum, so sub-ulp increments are kept. On a closed domain
+the volume change must then equal the clamp mass plus the injected volume to
+within the float32 rounding of the flux sums, where the plain float32 update
+drifts by a measurable amount.
 """
 
 from __future__ import annotations

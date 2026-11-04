@@ -193,7 +193,17 @@ def test_a_phase_must_not_name_an_unknown_stretch() -> None:
         _conditions(a=Wall(), b=Wall())
 
 
-@pytest.mark.parametrize("condition", [NormalDepth(0.0), Inflow(1.0, 0.0), Inflow(-1.0, 1e-3)])
+@pytest.mark.parametrize(
+    "condition",
+    [
+        NormalDepth(0.0),
+        Inflow(1.0, 0.0),
+        Inflow(-1.0, 1e-3),
+        Stage(float("nan")),
+        NormalDepth(float("inf")),
+        Inflow(float("nan"), 1e-3),
+    ],
+)
 def test_bad_condition_values_raise(condition: Any) -> None:
     with pytest.raises(ValueError, match="open boundary 'a'"):
         _conditions(a=condition)

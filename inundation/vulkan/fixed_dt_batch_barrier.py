@@ -28,7 +28,14 @@ import kp
 import numpy as np
 
 from .fixed_dt_batch import SWESolverFixedDtBatch
-from .solver import _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_source, _pc_update
+from .solver import (
+    _pc_cfl_accum,
+    _pc_cfl_reduce,
+    _pc_flux,
+    _pc_source,
+    _pc_update,
+    refuse_momentum_capture,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -99,6 +106,7 @@ class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
         multiple of ``output_every_steps``. This supports deterministic
         step-count cadence for Vulkan benchmarks.
         """
+        refuse_momentum_capture("fixed_dt_batch_barrier", capture_momentum_snapshots)
         N, E = self.N, self.E
         g, dt_ = self._g, self._dry_tol
         cfl = self._cfl

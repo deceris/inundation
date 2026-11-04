@@ -123,6 +123,25 @@ because the test only checked registration. The bench now takes both: repeats en
 determinism and warm-up discards runs of the lake case. A test now hands each suite's
 real parser those arguments. This is why the suite has determinism at all.
 
+## Found by the review
+
+An independent review of the branch found three defects, fixed in one commit on top of
+`f609715`:
+
+- **Outflow edges drew momentum in.** On `FreeOutflow` and `NormalDepth`, a flux that
+  would draw water in had only its mass zeroed; the momentum flux of the outflow ghost
+  stayed. Such an edge is now a wall for the whole flux. A new test, water leaving a
+  `NormalDepth` outlet at 2 m/s, fails on the old kernel and matches a wall bit for bit
+  on the new one.
+- **Non-finite condition values were accepted.** `Stage(nan)` reached the kernels, and
+  the run zero-filled the non-finite snapshot. Every condition value must now be finite.
+- **Host backends ignored `capture_momentum_snapshots`** when called directly, returning
+  depth only. They now raise, as the workflow already did.
+
+All seven gate suites give the same summaries field for field before and after the fix,
+wall times aside, and 551 unit tests pass. None of the gates has an outlet whose flow
+turns back inward, so the fix changes none of their numbers.
+
 ## Departures from the plan
 
 - `OPEN_WORDS` is 2, kind and value, not 3.

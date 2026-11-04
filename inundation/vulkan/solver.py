@@ -97,6 +97,12 @@ def _pc_source(nc: int, dt: float) -> list[float]:
     return [uint_as_float_bits(nc), float(dt)]
 
 
+def refuse_momentum_capture(backend: str, capture_momentum_snapshots: bool) -> None:
+    """Raise for a run() that returns depth only, instead of silently dropping hu/hv."""
+    if capture_momentum_snapshots:
+        raise ValueError(f"{backend} does not capture momentum snapshots")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SWESolver
 # ─────────────────────────────────────────────────────────────────────────────

@@ -19,8 +19,8 @@ geometry; Vulkan/Kompute executes the timestep kernels.
 
 `gpu_resident_batch` is the default: simulated time, dt and the active set
 stay on the device, flux sums are gathered in a fixed order, and the depth is
-an exact float32 pair updated with error-free transforms so the volume balance
-is exact up to the positivity clamp. `fixed_dt_batch_barrier` is the
+a compensated float32 pair updated through two-sum, so the volume balance
+holds to float32 rounding of the flux sums. `fixed_dt_batch_barrier` is the
 host-driven barrier reference.
 
 ## Synchronization

@@ -139,14 +139,12 @@ float inflow_depth(float q, float riemann) {
     return s * s;
 }
 
-// The state beyond an open edge, from the cell inside it. The value word is
-// sqrt(S)/n for OPEN_NORMAL, the depth over this cell's bed for OPEN_STAGE and
-// the discharge per unit width for OPEN_INFLOW.
-void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
-                out float hG, out float huG, out float hvG)
+// The state beyond an open edge of condition `kind`, from the cell inside it.
+// `value` is sqrt(S)/n for OPEN_NORMAL, the depth over this cell's bed for
+// OPEN_STAGE and the discharge per unit width for OPEN_INFLOW.
+void ghost_state(uint kind, float value, float hL, float huL, float hvL, float nx_, float ny_,
+                 out float hG, out float huG, out float hvG)
 {
-    uint kind = open_kind(cR);
-    float value = open_value(cR);
     float uL = safe_vel(hL, huL);
     float vL = safe_vel(hL, hvL);
     float unL = uL * nx_ + vL * ny_;
@@ -173,6 +171,17 @@ void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
     }
     huG = hG * (un * nx_ - ut * ny_);
     hvG = hG * (un * ny_ + ut * nx_);
+}
+
+void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
+                out float hG, out float huG, out float hvG)
+{
+    ghost_state(open_kind(cR), open_value(cR), hL, huL, hvL, nx_, ny_, hG, huG, hvG);
+}
+
+bool outflow_only(int cR) {
+    uint kind = open_kind(cR);
+    return kind == OPEN_FREE || kind == OPEN_NORMAL;
 }
 
 // Mass flux through a boundary edge: a wall passes none, as FLUX_GLSL explains;
@@ -230,8 +239,19 @@ _FLUX_MASS_ATOMIC = """\
     if (cR < 0) { Fh = 0.0; }
 """
 
+# An outflow-only edge whose flux would draw water in is a wall for that stage:
+# its whole flux, momentum included, is redone against the wall ghost. Zeroing
+# only Fh would leave the inward momentum flux of the outflow ghost in place.
 _FLUX_MASS_GATHER = """\
-    if (cR < 0) { Fh = boundary_mass_flux(cR, Fh); }
+    if (cR < -1 && outflow_only(cR) && Fh < 0.0) {
+        ghost_state(OPEN_WALL, 0.0, hL, huL, hvL, nx_, ny_, hR, huR, hvR);
+        face_states(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_,
+                    hLs, hqnL, hqtL, hRs, hqnR, hqtR);
+        hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
+        Fh = 0.0;
+    } else if (cR < 0) {
+        Fh = boundary_mass_flux(cR, Fh);
+    }
 """
 
 _FLUX_ACCUM_ATOMIC = """\
@@ -429,10 +449,12 @@ _UPDATE_SUM_GATHER = """\
 
 
 # Compensated depth (``compensated`` on the solver): the depth of a cell is the
-# exact sum of two float32 words, h + h_lo with |h_lo| <= ulp(h)/2 (bindings
-# 28-29; the predictor keeps its own pair). Every update goes through an
-# error-free transform, so an increment smaller than half an ulp of h is kept
-# in h_lo instead of being rounded away. The flux kernels read h alone.
+# sum of two float32 words, h + h_lo with |h_lo| <= ulp(h)/2 (bindings 28-29;
+# the predictor keeps its own pair). Updates go through two-sum, so an
+# increment smaller than half an ulp of h is kept in h_lo instead of being
+# rounded away. Not exact: folding the old low word into the two-sum residual
+# is a plain add, which can round off ~ulp(h_lo), about 2^-48 h. The flux
+# kernels read h alone.
 _COMP_BINDINGS = """\
 layout(set=0, binding=28) buffer HLO    { float h_lo[];   };
 layout(set=0, binding=29) buffer H1LO   { float h1_lo[];  };
@@ -452,7 +474,9 @@ void two_sum(float a, float b, out float s, out float e) {
     e = err;
 }
 
-// (hi + loi) + inc as a renormalised pair, clamped at zero.
+// (hi + loi) + inc as a renormalised pair, clamped at zero. `e += loi` rounds,
+// so the pair is not error-free; the loss is ~ulp(loi), far below the float32
+// flux sums that bound the measured drift.
 void add_compensated(float hi, float loi, float inc, out float h_new, out float lo_new) {
     float s, e;
     two_sum(hi, inc, s, e);

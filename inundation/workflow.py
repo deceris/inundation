@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -401,6 +401,8 @@ def _open_conditions(
 ) -> tuple[int, NDArray[np.float32]]:
     """Condition code and per-edge value of one stretch; see ``open_ghost`` in the kernels."""
     cells = geom.edge_cellL[edges]
+    if not np.isfinite(astuple(condition)).all():
+        raise ValueError(f"open boundary {boundary.name!r} has a non-finite value: {condition}")
     if isinstance(condition, Wall):
         return OPEN_WALL, np.zeros(edges.size, dtype=np.float32)
     if isinstance(condition, FreeOutflow):

@@ -11,7 +11,15 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_source, _pc_update
+from .solver import (
+    SWESolver,
+    _pc_cfl_accum,
+    _pc_cfl_reduce,
+    _pc_flux,
+    _pc_source,
+    _pc_update,
+    refuse_momentum_capture,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,6 +106,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 t_start=t_start,
                 capture_momentum_snapshots=capture_momentum_snapshots,
             )
+        refuse_momentum_capture("async_sync_window", capture_momentum_snapshots)
 
         N, E = self.N, self.E
         g, dry_tol = self._g, self._dry_tol

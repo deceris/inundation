@@ -10,7 +10,15 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_source, _pc_update
+from .solver import (
+    SWESolver,
+    _pc_cfl_accum,
+    _pc_cfl_reduce,
+    _pc_flux,
+    _pc_source,
+    _pc_update,
+    refuse_momentum_capture,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,6 +59,7 @@ class SWESolverBatchedSubmit(SWESolver):
         ]
     ):
         """Run Heun RK2 simulation with batched GPU sequence evaluation."""
+        refuse_momentum_capture("batched_submit", capture_momentum_snapshots)
         N, E = self.N, self.E
         g, dt_ = self._g, self._dry_tol
         cfl = self._cfl

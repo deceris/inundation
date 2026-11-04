@@ -41,6 +41,32 @@ def test_unbarriered_fixed_dt_batch_refuses_to_run() -> None:
         run(solver, 1.0)
 
 
+@requires_vulkan
+@pytest.mark.parametrize(
+    "module",
+    ["async_sync_window", "batched_submit", "device_cfl", "fixed_dt_batch_barrier"],
+)
+def test_host_backends_refuse_momentum_capture(module: str) -> None:
+    import importlib
+
+    from inundation.workflow import _compile_solver_shaders
+
+    solvers = importlib.import_module(f"inundation.vulkan.{module}")
+    cls = next(getattr(solvers, n) for n in solvers.__all__ if n.startswith("SWESolver"))
+    grid = valley_grid()
+    zeros = np.zeros(grid.N, dtype=np.float32)
+    solver = cls(
+        grid,
+        _compile_solver_shaders(),
+        dam(grid),
+        zeros,
+        zeros,
+        np.full(grid.N, MANNING, np.float32),
+    )
+    with pytest.raises(ValueError, match="momentum"):
+        run(solver, 1.0, capture_momentum_snapshots=True)
+
+
 def test_host_driven_backends_keep_a_lower_cfl() -> None:
     # They reuse one dt for cfl_interval steps; the resident backend recomputes
     # the bound every step, so only it may run at CFL_DEFAULT.

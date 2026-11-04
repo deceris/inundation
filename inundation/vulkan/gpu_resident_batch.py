@@ -148,8 +148,8 @@ class SWESolverGpuResidentBatch(SWESolver):
     active_set: bool = True
     # Fixed-order sums instead of float atomics: bit-identical repeat runs.
     deterministic: bool = True
-    # Depth as an exact float32 pair (h, h_lo), updated with error-free
-    # transforms: increments below half an ulp of h are kept, not rounded
+    # Depth as a compensated float32 pair (h, h_lo), updated through two-sum:
+    # increments below half an ulp of h are kept, not rounded
     # away. Read when a run is recorded; the low words persist across resumed
     # runs and are cleared by reset().
     compensated: bool = True
