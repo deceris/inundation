@@ -267,3 +267,15 @@ Backwater cannot cross a cut until the two-way effort that follows. A stretch-wi
 full curve needs a new reduction on the device. Stretches are lines in the run config, so
 nothing waits on the mesher. Design:
 [`29-open-boundaries/`](../implementation/29-open-boundaries/plan.md).
+## Open boundaries: direct discharge flux, runtime masks
+
+A prescribed-discharge edge sets the mass flux to the requested value instead
+of constructing a ghost state for HLLC: HLLC does not return an exact mass
+flux, so a ghost state would break the boundary mass balance. Outflow is capped
+at the cell's stage volume, so the positivity clamp never creates mass.
+Prescribed depth is a fixed-depth ghost state with interior velocity. It is
+accepted as partially reflective; a characteristic condition is deferred.
+Edge masks are runtime arguments to `SWEWorkflow.run()`, not
+`WorkflowConfig` fields or geometry/cache fields, because Hilbert reordering
+permutes edges and masks can only be built against the prepared geometry.
+Evidence: [`21-open-boundaries/`](../implementation/21-open-boundaries/results.md).
