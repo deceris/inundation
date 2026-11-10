@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -46,7 +48,14 @@ def test_unbarriered_fixed_dt_batch_refuses_to_run() -> None:
     "module",
     ["async_sync_window", "batched_submit", "device_cfl", "fixed_dt_batch_barrier"],
 )
-def test_host_backends_refuse_momentum_capture(module: str) -> None:
+@pytest.mark.parametrize(
+    ("open_edges", "kwargs", "match"),
+    [((), {"capture_momentum_snapshots": True}, "momentum"), (None, {}, "open-boundary")],
+    ids=["momentum", "open"],
+)
+def test_host_backends_refuse_what_they_do_not_record(
+    module: str, open_edges: Any, kwargs: dict[str, Any], match: str
+) -> None:
     import importlib
 
     from inundation.workflow import _compile_solver_shaders
@@ -55,6 +64,8 @@ def test_host_backends_refuse_momentum_capture(module: str) -> None:
     cls = next(getattr(solvers, n) for n in solvers.__all__ if n.startswith("SWESolver"))
     grid = valley_grid()
     zeros = np.zeros(grid.N, dtype=np.float32)
+    if open_edges is None:
+        open_edges = [np.flatnonzero(grid.edge_cellR == -1)[:1]]
     solver = cls(
         grid,
         _compile_solver_shaders(),
@@ -62,9 +73,10 @@ def test_host_backends_refuse_momentum_capture(module: str) -> None:
         zeros,
         zeros,
         np.full(grid.N, MANNING, np.float32),
+        open_edges=open_edges,
     )
-    with pytest.raises(ValueError, match="momentum"):
-        run(solver, 1.0, capture_momentum_snapshots=True)
+    with pytest.raises(ValueError, match=match):
+        run(solver, 1.0, **kwargs)
 
 
 def test_host_driven_backends_keep_a_lower_cfl() -> None:

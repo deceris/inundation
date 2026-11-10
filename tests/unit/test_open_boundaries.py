@@ -145,7 +145,7 @@ def test_no_inflow_splits_to_zero() -> None:
     assert not conveyance_split(0.0, lengths, beds, manning, 1e-3).any()
 
 
-@pytest.mark.parametrize("backend", ["baseline", "device_cfl", "fixed_dt_batch"])
+@pytest.mark.parametrize("backend", ["device_cfl", "fixed_dt_batch"])
 def test_other_backends_refuse_open_boundaries(backend: str) -> None:
     with pytest.raises(ValueError, match=rf"open_boundaries.*{backend}"):
         _config(solver_impl=backend, open_boundaries=[OpenBoundary("a", _east_line(), 1.0)])

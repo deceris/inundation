@@ -34,7 +34,7 @@ from .solver import (
     _pc_flux,
     _pc_source,
     _pc_update,
-    refuse_momentum_capture,
+    refuse_unrecorded,
 )
 
 if TYPE_CHECKING:
@@ -106,7 +106,7 @@ class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
         multiple of ``output_every_steps``. This supports deterministic
         step-count cadence for Vulkan benchmarks.
         """
-        refuse_momentum_capture("fixed_dt_batch_barrier", capture_momentum_snapshots)
+        refuse_unrecorded("fixed_dt_batch_barrier", capture_momentum_snapshots, self.n_open)
         N, E = self.N, self.E
         g, dt_ = self._g, self._dry_tol
         cfl = self._cfl

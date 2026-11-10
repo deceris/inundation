@@ -97,6 +97,10 @@ benchmark-bowl *args:
 benchmark-open-boundary *args:
     {{docker_prefix}} uv run python -m inundation.bench.open_boundary {{args}}
 
+# SWASHES analytic-solution benchmarks (needs the `swashes` extra).
+benchmark-swashes *args:
+    {{docker_prefix}} uv run python -m inundation.bench.swashes {{args}}
+
 # Run the benchmark harnesses and fold logs, metrics, and animations into
 # one self-contained HTML report at .tmp/bench-report/report.html.
 benchmark-report *args:

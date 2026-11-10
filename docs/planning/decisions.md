@@ -267,6 +267,7 @@ Backwater cannot cross a cut until the two-way effort that follows. A stretch-wi
 full curve needs a new reduction on the device. Stretches are lines in the run config, so
 nothing waits on the mesher. Design:
 [`29-open-boundaries/`](../implementation/29-open-boundaries/plan.md).
+
 ## Open boundaries: direct discharge flux, runtime masks
 
 A prescribed-discharge edge sets the mass flux to the requested value instead
@@ -279,3 +280,18 @@ Edge masks are runtime arguments to `SWEWorkflow.run()`, not
 `WorkflowConfig` fields or geometry/cache fields, because Hilbert reordering
 permutes edges and masks can only be built against the prepared geometry.
 Evidence: [`21-open-boundaries/`](../implementation/21-open-boundaries/results.md).
+
+## Open boundaries: named stretches replace edge masks; baseline supported
+
+Effort 29's named stretches with per-phase conditions replace effort 21's
+static edge masks (`inundation/boundary.py`, the discharge/depth/free kinds and
+the `open-channel` bench are removed). Stretches survive remeshing and Hilbert
+reordering, change per phase, and report volume per stretch, which basin
+exchange needs. Effort 21's own entry above stays as history. The one thing
+effort 21 had that 29 lacked, a second backend, is ported: `baseline` builds
+the same ghost state in its host kernels, so SWASHES cross-checks the resident
+boundary kernels against an independent implementation. Other host backends
+still refuse open boundaries. SWASHES is compared against the reference
+binary, not a port of its formulas: the binary is the published reference, so
+a port would add code that itself needs validating. Evidence:
+[`31-swashes/results.md`](../implementation/31-swashes/results.md).

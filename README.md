@@ -239,6 +239,8 @@ wall unless `WorkflowConfig.open_boundaries` names a stretch of it as an
 `boundary_volumes_m3` reports the volume out of and into each stretch at every
 output window. `inflow_phases` turns a stretch's measured outflow into the inflow
 of the next basin. The exchange is one way, so backwater cannot cross a cut.
+Open boundaries run on `gpu_resident_batch` (with `deterministic` on) and
+`baseline`; the other backends raise.
 
 `dt_max` is the maximum numerical timestep, not the snapshot interval.
 `output_interval_s` controls depth snapshot timing. `cfl_interval` controls how

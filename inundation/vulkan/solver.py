@@ -48,11 +48,16 @@ except ImportError as exc:
     raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from numpy.typing import NDArray
 
     from ..mesh.geometry import MeshGeometry
+
+# Words per open edge: condition, value (OPEN_WORDS in the shaders).
+_OPEN_WORDS = 2
+# Words per open edge of the flux kernels' volume: out (hi, lo), in (hi, lo).
+_OPEN_VOLUME_WORDS = 4
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Push-constant helpers
@@ -97,10 +102,12 @@ def _pc_source(nc: int, dt: float) -> list[float]:
     return [uint_as_float_bits(nc), float(dt)]
 
 
-def refuse_momentum_capture(backend: str, capture_momentum_snapshots: bool) -> None:
-    """Raise for a run() that returns depth only, instead of silently dropping hu/hv."""
+def refuse_unrecorded(backend: str, capture_momentum_snapshots: bool, n_open: int) -> None:
+    """Raise for a run() that records no momentum or boundary volume, instead of dropping it."""
     if capture_momentum_snapshots:
         raise ValueError(f"{backend} does not capture momentum snapshots")
+    if n_open:
+        raise ValueError(f"{backend} does not record open-boundary volumes")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,6 +137,9 @@ class SWESolver:
         CFL number.  Default ``default_cfl`` of the backend.
     workgroup_size : int
         GPU workgroup size.  Default 256.
+    open_edges : sequence of (k,) int64
+        Each open stretch's edges, as indices into ``geom``. Every other
+        boundary edge is a wall; ``set_open_conditions`` sets the open ones.
 
     """
 
@@ -149,8 +159,12 @@ class SWESolver:
         dry_tol: float = DRY_TOL_DEFAULT,
         cfl: float | None = None,
         workgroup_size: int = 256,
+        open_edges: Sequence[NDArray[np.int64]] = (),
     ) -> None:
         self.geom = geom
+        self._open_stretches = [np.asarray(edges, dtype=np.int64) for edges in open_edges]
+        # (stretches, 2) volume out of and into the mesh at every snapshot of a run.
+        self.open_volume_snapshots: list[NDArray[np.float64]] = []
         self.N = geom.N
         self.E = geom.E
         self._g = float(g)
@@ -172,6 +186,8 @@ class SWESolver:
         self._mgr = kp.Manager()
         self._build_tensors(geom, h0, hu0, hv0, n0)
         self._build_algorithms(spv)
+        self._eft_probe_spv = spv["eft_probe"]
+        self._eft_checked = False
 
         # Cumulative RK2-step counter across all `run()` calls on this
         # instance (i.e. across all phases of one workflow run) — surfaced
@@ -219,8 +235,14 @@ class SWESolver:
         self.t_elen = g(geom.edge_len)
         self.t_enx = g(geom.edge_nx)
         self.t_eny = g(geom.edge_ny)
+        # Open edge k is ``ecR == -2 - k``, in stretch order; ``-1`` stays a wall.
+        open_edges = np.concatenate([np.empty(0, dtype=np.int64), *self._open_stretches])
+        self.n_open = int(open_edges.size)
+        self._open_cells = geom.edge_cellL[open_edges]
+        cell_r = geom.edge_cellR.copy()
+        cell_r[open_edges] = -2 - np.arange(self.n_open, dtype=cell_r.dtype)
         self.t_ecL = g(geom.edge_cellL.view(np.float32))
-        self.t_ecR = g(geom.edge_cellR.view(np.float32))
+        self.t_ecR = g(cell_r.view(np.float32))
         self.t_dh = g(np.zeros(self.N, dtype=np.float32))
         self.t_dhu = g(np.zeros(self.N, dtype=np.float32))
         self.t_dhv = g(np.zeros(self.N, dtype=np.float32))
@@ -262,7 +284,16 @@ class SWESolver:
         # Appending to _all_tensors instead would silently renumber whichever
         # tensor a subclass appends for its own binding 19.
         self._update_tensors = [*self._all_tensors, self.t_clamp_mass]
-        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._update_tensors)).eval()
+        # Binding 19 of the flux and CFL kernels: (condition, value) words per open
+        # edge. Binding 20 of the flux kernels: each open edge's volume out (hi, lo)
+        # and in (hi, lo). Kompute rejects empty tensors: pad a mesh with no open edges.
+        n_words = max(self.n_open, 1)
+        self.t_open = g(np.zeros(_OPEN_WORDS * n_words, dtype=np.float32))
+        self.t_open_volume = g(np.zeros(_OPEN_VOLUME_WORDS * n_words, dtype=np.float32))
+        self._flux_tensors = [*self._all_tensors, self.t_open, self.t_open_volume]
+        self._mgr.sequence().record(
+            kp.OpTensorSyncDevice([*self._update_tensors, self.t_open, self.t_open_volume])
+        ).eval()
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
         N, E = self.N, self.E
@@ -270,7 +301,7 @@ class SWESolver:
         g, dt = self._g, self._dry_tol
 
         self._algo_flux = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["flux"],
             workgroup=wg_e,
             spec_consts=[],
@@ -304,7 +335,7 @@ class SWESolver:
     ) -> None:
         """Build the CFL accumulation + reduction algorithms (shared by all variants)."""
         self._algo_cfl_accum = self._mgr.algorithm(
-            self._all_tensors,
+            [*self._all_tensors, self.t_open],
             spv["cfl_accum"],
             workgroup=wg_e,
             spec_consts=[],
@@ -384,16 +415,69 @@ class SWESolver:
         self._set_tensor_host_data(self.t_dh, zeros)
         self._set_tensor_host_data(self.t_dhu, zeros)
         self._set_tensor_host_data(self.t_dhv, zeros)
+        self._set_tensor_host_data(
+            self.t_open_volume, np.zeros(self.t_open_volume.size(), dtype=np.float32)
+        )
 
         self._mgr.sequence().record(
             kp.OpTensorSyncDevice(
-                [self.t_h, self.t_hu, self.t_hv, self.t_dh, self.t_dhu, self.t_dhv]
+                [
+                    self.t_h,
+                    self.t_hu,
+                    self.t_hv,
+                    self.t_dh,
+                    self.t_dhu,
+                    self.t_dhv,
+                    self.t_open_volume,
+                ]
             )
         ).eval()
 
     def _reset_to_initial(self) -> None:
         """Restore the initial condition, momentum included, for a fresh run."""
         self.reset(self._h0, self._hu0, self._hv0)
+
+    def set_open_conditions(self, kinds: NDArray[np.uint32], values: NDArray[np.float32]) -> None:
+        """Set every open edge's condition (``OPEN_*``), in stretch order, before a run."""
+        if kinds.size != self.n_open or values.size != self.n_open:
+            raise ValueError(
+                f"expected {self.n_open} open edges, got {kinds.size} kinds and "
+                f"{values.size} values"
+            )
+        words = np.empty(_OPEN_WORDS * self.n_open, dtype=np.uint32)
+        words[0::2] = kinds
+        words[1::2] = values.astype(np.float32).view(np.uint32)
+        self._upload(self.t_open, words.view(np.float32))
+
+    def download_open_volumes(self) -> NDArray[np.float64]:
+        """``(stretches, 2)`` volume [m^3] out of and into the mesh since the start."""
+        words = self._download(self.t_open_volume).astype(np.float64)[
+            : _OPEN_VOLUME_WORDS * self.n_open
+        ]
+        pairs = words.reshape(-1, _OPEN_VOLUME_WORDS)
+        per_edge = np.column_stack([pairs[:, 0] + pairs[:, 1], pairs[:, 2] + pairs[:, 3]])
+        starts = np.r_[0, np.cumsum([edges.size for edges in self._open_stretches])[:-1]]
+        return np.add.reduceat(per_edge, starts.astype(np.int64), axis=0)
+
+    def _check_error_free_arithmetic(self) -> None:
+        """Refuse to run if the compiler optimised the compensated sums away."""
+        if self._eft_checked:
+            return
+        words = np.array([1.0, 1e-9, 0.0], dtype=np.float32)
+        tensor = self._mgr.tensor(words.copy())
+        algo = self._mgr.algorithm([tensor], self._eft_probe_spv, workgroup=(1, 1, 1))
+        seq = self._mgr.sequence()
+        seq.record(kp.OpTensorSyncDevice([tensor]))
+        seq.record(kp.OpAlgoDispatch(algo))
+        seq.record(kp.OpTensorSyncLocal([tensor]))
+        seq.eval()
+        if float(np.asarray(tensor.data())[2]) != float(words[1]):
+            raise RuntimeError(
+                "error-free arithmetic is broken on this device, so compensated depth would "
+                "leak mass: set MVK_CONFIG_FAST_MATH_ENABLED=0 before any Vulkan instance is "
+                "created, or set compensated = False"
+            )
+        self._eft_checked = True
 
     def reset_clamp_mass(self) -> None:
         """Zero the positivity-clamp accumulator."""
@@ -496,6 +580,13 @@ class SWESolver:
 
         if not resume:
             self._reset_to_initial()
+            self.open_volume_snapshots = []
+        if self.n_open:
+            self._check_error_free_arithmetic()
+
+        def record_volumes() -> None:
+            if self.n_open:
+                self.open_volume_snapshots.append(self.download_open_volumes())
 
         # Precompute inverse area for source application
         inv_area = (1.0 / self._area).astype(np.float32)
@@ -524,6 +615,7 @@ class SWESolver:
             snap_times = [0.0]
         hu_snapshots = [self.download_hu().copy()] if capture_momentum_snapshots else []
         hv_snapshots = [self.download_hv().copy()] if capture_momentum_snapshots else []
+        record_volumes()
         t_sim = _t_offset
         step = 0
         dt = dt_init
@@ -638,6 +730,7 @@ class SWESolver:
                     if hu_snap is not None and hv_snap is not None:
                         hu_snapshots.append(hu_snap)
                         hv_snapshots.append(hv_snap)
+                    record_volumes()
                     break
                 if progress:
                     _wall_elapsed = _time.monotonic() - _wall_start
@@ -652,8 +745,10 @@ class SWESolver:
                 if hu_snap is not None and hv_snap is not None:
                     hu_snapshots.append(hu_snap)
                     hv_snapshots.append(hv_snap)
+                record_volumes()
                 next_output_time += output_interval_s
 
+        self.steps_total += step
         h_final = self.download_h()
         if not snapshots or not np.allclose(snapshots[-1], h_final):
             snapshots.append(h_final.copy())
@@ -661,6 +756,7 @@ class SWESolver:
             if capture_momentum_snapshots:
                 hu_snapshots.append(self.download_hu().copy())
                 hv_snapshots.append(self.download_hv().copy())
+            record_volumes()
 
         if capture_momentum_snapshots:
             return snapshots, snap_times, hu_snapshots, hv_snapshots

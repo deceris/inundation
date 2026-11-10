@@ -31,6 +31,7 @@ from .tuning import (
     MOMENTUM_SNAPSHOT_BACKENDS,
     NPY_COLS_HUV,
     NPY_COLS_WITH_MANNING,
+    OPEN_BOUNDARY_BACKENDS,
     OPEN_FREE,
     OPEN_INFLOW,
     OPEN_NORMAL,
@@ -174,8 +175,8 @@ class WorkflowConfig:
     # 8 bytes per cell per output on top of the depth. Only the backends in
     # MOMENTUM_SNAPSHOT_BACKENDS can do it; any other raises here.
     capture_momentum_snapshots: bool = False
-    # Stretches of boundary that phases can open. gpu_resident_batch only, with
-    # deterministic accumulation.
+    # Stretches of boundary that phases can open. The backends in
+    # OPEN_BOUNDARY_BACKENDS only; gpu_resident_batch needs deterministic accumulation.
     open_boundaries: Sequence[OpenBoundary] = ()
     steps_per_graph: int | None = None
     # GPU-resident only: fixed-order flux sums (bit-identical repeat runs)
@@ -230,10 +231,10 @@ class WorkflowConfig:
                 f"{self.solver_impl!r}; use one of {sorted(MOMENTUM_SNAPSHOT_BACKENDS)}"
             )
         if self.open_boundaries:
-            if self.solver_impl != "gpu_resident_batch":
+            if self.solver_impl not in OPEN_BOUNDARY_BACKENDS:
                 raise ValueError(
                     f"open_boundaries is not supported by solver_impl {self.solver_impl!r}; "
-                    "use gpu_resident_batch"
+                    f"use one of {sorted(OPEN_BOUNDARY_BACKENDS)}"
                 )
             if self.deterministic is False:
                 raise ValueError("open_boundaries need deterministic accumulation")
@@ -818,7 +819,7 @@ class SWEWorkflow:
         solver_cls = solver_cls_by_impl[self.config.solver_impl]
         self._open_stretches = _open_stretch_edges(geom, self.config.open_boundaries)
         self._manning = n0
-        # WorkflowConfig accepts open boundaries on gpu_resident_batch only.
+        # WorkflowConfig accepts open boundaries on OPEN_BOUNDARY_BACKENDS only.
         open_args: dict[str, Any] = (
             {"open_edges": self._open_stretches} if self._open_stretches else {}
         )
@@ -887,7 +888,7 @@ class SWEWorkflow:
             t_end = t_current + phase.duration_s
             src = _build_phase_source_rate(self.geom, phase, valid_cell)
             if self._open_stretches:
-                cast("SWESolverGpuResidentBatch", self.solver).set_open_conditions(
+                self.solver.set_open_conditions(
                     *_build_phase_open_conditions(
                         self.geom,
                         self._manning,
@@ -976,7 +977,7 @@ class SWEWorkflow:
 
         boundary_volumes_m3: dict[str, NDArray[np.float64]] = {}
         if self._open_stretches:
-            volumes = np.stack(cast("SWESolverGpuResidentBatch", self.solver).open_volume_snapshots)
+            volumes = np.stack(self.solver.open_volume_snapshots)
             boundary_volumes_m3 = {
                 boundary.name: volumes[:, k]
                 for k, boundary in enumerate(self.config.open_boundaries)

@@ -9,6 +9,8 @@ dependencies = ["numpy>=1.24,<2.0", "hilbertcurve>=2.0"]
 mesh-parquet = ["pyarrow", "shapely>=2.0"]
 mesh-gis = ["geopandas>=0.14", "shapely>=2.0", "rasterio>=1.3", "pillow>=10.0"]
 viz = ["matplotlib>=3.8", "pillow>=10.0"]
+# SWASHES analytic references for inundation/bench/swashes.py (prebuilt binary).
+swashes = ["swashes==1.5.0"]
 dev = [
     "ruff==0.15.7",
     "pyright==1.1.408",

@@ -1,6 +1,6 @@
 """CFL and time-control shader sources for SWE solver."""
 
-from .flux import HLLC_GLSL
+from .flux import HLLC_GLSL, OPEN_BINDINGS, OPEN_GHOST_GLSL
 
 CFL_ACCUM_GLSL = (
     """\
@@ -28,7 +28,9 @@ layout(set=0, binding=15) buffer HV1    { float hv1[];    };
 layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
 layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
-
+"""
+    + OPEN_BINDINGS
+    + """
 layout(push_constant) uniform PC {
     uint  num_edges;
     float dt;
@@ -39,6 +41,7 @@ layout(push_constant) uniform PC {
 
 """
     + HLLC_GLSL
+    + OPEN_GHOST_GLSL
     + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
@@ -52,16 +55,18 @@ void main() {
 
     float hL = h[cL], huL = hu[cL], hvL = hv[cL];
     float hR, huR, hvR;
-    if (cR < 0) {
+    if (cR == -1) {
         hR  = hL;
         huR = huL - 2.0 * (huL * nx_ + hvL * ny_) * nx_;
         hvR = hvL - 2.0 * (huL * nx_ + hvL * ny_) * ny_;
+    } else if (cR < 0) {
+        open_ghost(cR, hL, huL, hvL, nx_, ny_, hR, huR, hvR);
     } else {
         hR = h[cR]; huR = hu[cR]; hvR = hv[cR];
     }
     // A fully dry edge carries no flux and no CFL constraint, as in the flux
     // kernels: a cell whose edges are all dry gets no dt estimate at all.
-    if (hL < pc.dry_tol && hR < pc.dry_tol) return;
+    if (hL < pc.dry_tol && hR < pc.dry_tol && !open_forced(cR)) return;
 
     float dzL = edz[2u * eid];
     float dzR = edz[2u * eid + 1u];

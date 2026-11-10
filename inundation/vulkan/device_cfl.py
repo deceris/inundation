@@ -18,7 +18,7 @@ from .solver import (
     _pc_flux,
     _pc_source,
     _pc_update,
-    refuse_momentum_capture,
+    refuse_unrecorded,
 )
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ class SWESolverDeviceCfl(SWESolver):
         g, dt = self._g, self._dry_tol
 
         self._algo_flux = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["flux"],
             workgroup=wg_e,
             spec_consts=[],
@@ -92,7 +92,7 @@ class SWESolverDeviceCfl(SWESolver):
         ]
     ):
         """Run Heun RK2 simulation with GPU-side CFL resolve kernel."""
-        refuse_momentum_capture("device_cfl", capture_momentum_snapshots)
+        refuse_unrecorded("device_cfl", capture_momentum_snapshots, self.n_open)
         N, E = self.N, self.E
         g, dt_ = self._g, self._dry_tol
         cfl = self._cfl

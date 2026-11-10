@@ -44,6 +44,8 @@ MANNING = 0.03
 END_S = 60.0
 DRAINING_DEPTH_M = 1.003e-4
 DRAIN_S = 800.0
+# Both backends that take open boundaries; the active set and repeatability are resident only.
+BACKENDS = pytest.mark.parametrize("backend", ["gpu_resident_batch", "baseline"])
 
 
 def _bed(x: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -124,8 +126,9 @@ def test_repeat_runs_are_bit_identical(tmp_path: Path) -> None:
     assert _bits(_workflow(tmp_path).run(phases)) == _bits(_workflow(tmp_path).run(phases))
 
 
-def test_volumes_line_up_with_the_snapshots(tmp_path: Path) -> None:
-    result = _workflow(tmp_path).run(
+@BACKENDS
+def test_volumes_line_up_with_the_snapshots(tmp_path: Path, backend: str) -> None:
+    result = _workflow(tmp_path, solver_impl=backend).run(
         [_phase(Inflow(50.0, SLOPE), Wall(), 12.0), _phase(Inflow(20.0, SLOPE), Wall(), 8.0)]
     )
     volumes = result.boundary_volumes_m3["up"]
@@ -137,57 +140,73 @@ def test_volumes_line_up_with_the_snapshots(tmp_path: Path) -> None:
     assert volumes[-1, 1] == pytest.approx(50.0 * 12.0 + 20.0 * 8.0, rel=1e-6)
 
 
-def test_a_trickle_too_thin_to_wet_a_cell_still_arrives(tmp_path: Path) -> None:
+@BACKENDS
+def test_a_trickle_too_thin_to_wet_a_cell_still_arrives(tmp_path: Path, backend: str) -> None:
     discharge = 1e-3
-    result = _workflow(tmp_path).run([_phase(Inflow(discharge, SLOPE), Wall())])
+    result = _workflow(tmp_path, solver_impl=backend).run(
+        [_phase(Inflow(discharge, SLOPE), Wall())]
+    )
     assert float(result.h_final.max()) < 1e-4
     assert result.boundary_volumes_m3["up"][-1, 1] == pytest.approx(discharge * END_S, rel=1e-6)
     assert result.volume_final_m3 == pytest.approx(discharge * END_S, rel=1e-6)
 
 
-def test_balance_closes_while_water_enters_and_leaves(tmp_path: Path) -> None:
+@BACKENDS
+def test_balance_closes_while_water_enters_and_leaves(tmp_path: Path, backend: str) -> None:
     initial = 0.5 * LENGTH_M * WIDTH_M
-    result = _workflow(tmp_path, initial_depth=0.5).run(
+    result = _workflow(tmp_path, solver_impl=backend, initial_depth=0.5).run(
         [_phase(Inflow(50.0, SLOPE), NormalDepth(SLOPE), 120.0)]
     )
     went_in = result.boundary_volumes_m3["up"][-1, 1]
     went_out = result.boundary_volumes_m3["down"][-1, 0]
     assert went_out > 0.0
     balance = initial + went_in - went_out - result.volume_final_m3
-    assert abs(balance) / initial < 1e-7
+    # Baseline keeps depth as plain float32: a closed run of this channel drifts
+    # 1.2e-7 there, against 2e-11 on the compensated resident depth.
+    assert abs(balance) / initial < (1e-7 if backend == "gpu_resident_batch" else 1e-6)
 
 
+@BACKENDS
 @pytest.mark.parametrize("down", [FreeOutflow(), NormalDepth(SLOPE)], ids=["free", "normal"])
-def test_outflow_conditions_never_draw_water_in(tmp_path: Path, down: Any) -> None:
-    result = _workflow(tmp_path, initial_depth=0.5).run([_phase(Wall(), down)])
+def test_outflow_conditions_never_draw_water_in(tmp_path: Path, backend: str, down: Any) -> None:
+    result = _workflow(tmp_path, solver_impl=backend, initial_depth=0.5).run([_phase(Wall(), down)])
     assert result.boundary_volumes_m3["down"][-1, 1] == 0.0
 
 
+@BACKENDS
 @pytest.mark.parametrize("down", [FreeOutflow(), NormalDepth(SLOPE)], ids=["free", "normal"])
-def test_flow_running_away_from_an_outlet_draws_nothing_in(tmp_path: Path, down: Any) -> None:
-    result = _workflow(tmp_path, initial_depth=0.5, initial_velocity=-0.5).run(
+def test_flow_running_away_from_an_outlet_draws_nothing_in(
+    tmp_path: Path, backend: str, down: Any
+) -> None:
+    result = _workflow(tmp_path, solver_impl=backend, initial_depth=0.5, initial_velocity=-0.5).run(
         [_phase(Wall(), down, 5.0)]
     )
     assert result.boundary_volumes_m3["down"][-1, 1] == 0.0
 
 
-def test_an_outlet_that_draws_nothing_in_acts_as_a_wall(tmp_path: Path) -> None:
+@BACKENDS
+def test_an_outlet_that_draws_nothing_in_acts_as_a_wall(tmp_path: Path, backend: str) -> None:
     # Water running away from the outlet faster than the normal-depth ghost
     # leaves: the Riemann flux points inward at every stage of this short run,
     # so the edge must be a wall for momentum as well as mass. FreeOutflow
     # cannot show this: away from the face its ghost already is the wall mirror.
     def run(down: Any) -> WorkflowResult:
-        workflow = _workflow(tmp_path, initial_depth=0.5, initial_velocity=-2.0)
+        workflow = _workflow(
+            tmp_path, solver_impl=backend, initial_depth=0.5, initial_velocity=-2.0
+        )
         return workflow.run([_phase(Wall(), down, 1.0)])
 
     closed, outlet = run(Wall()), run(NormalDepth(1e-5))
     assert outlet.hu_final is not None and closed.hu_final is not None
-    assert np.array_equal(outlet.h_final, closed.h_final)
-    assert np.array_equal(outlet.hu_final, closed.hu_final)
+    # Baseline sums fluxes with float atomics: two closed runs already differ by an ulp.
+    atol = 0.0 if backend == "gpu_resident_batch" else 1e-6
+    np.testing.assert_allclose(outlet.h_final, closed.h_final, rtol=0.0, atol=atol)
+    np.testing.assert_allclose(outlet.hu_final, closed.hu_final, rtol=0.0, atol=atol)
 
 
-def test_a_dry_outflow_passes_nothing(tmp_path: Path) -> None:
-    result = _workflow(tmp_path).run([_phase(Wall(), FreeOutflow())])
+@BACKENDS
+def test_a_dry_outflow_passes_nothing(tmp_path: Path, backend: str) -> None:
+    result = _workflow(tmp_path, solver_impl=backend).run([_phase(Wall(), FreeOutflow())])
     assert not result.boundary_volumes_m3["down"].any()
     assert not result.h_final.any()
 

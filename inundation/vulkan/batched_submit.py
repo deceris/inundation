@@ -17,7 +17,7 @@ from .solver import (
     _pc_flux,
     _pc_source,
     _pc_update,
-    refuse_momentum_capture,
+    refuse_unrecorded,
 )
 
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ class SWESolverBatchedSubmit(SWESolver):
         ]
     ):
         """Run Heun RK2 simulation with batched GPU sequence evaluation."""
-        refuse_momentum_capture("batched_submit", capture_momentum_snapshots)
+        refuse_unrecorded("batched_submit", capture_momentum_snapshots, self.n_open)
         N, E = self.N, self.E
         g, dt_ = self._g, self._dry_tol
         cfl = self._cfl

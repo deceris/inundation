@@ -151,6 +151,21 @@ SUITES: tuple[SuiteSpec, ...] = (
         ),
         gif_args=(),
     ),
+    SuiteSpec(
+        name="swashes",
+        module="inundation.bench.swashes",
+        title="SWASHES analytic solutions",
+        description=(
+            "Purpose: compare against SWASHES (Delestre et al. 2013) analytic solutions.\n"
+            "Setup: SWASHES' own beds, initial states, open boundaries and Manning "
+            "coefficients: steady flow over a bump (subcritical, transcritical, with shock), "
+            "emerged lake at rest, MacDonald channels with friction, and Thacker's 1D and 2D "
+            "oscillations.\n"
+            "Reference and validation: the SWASHES program evaluated at the mesh's cell centres; "
+            "depth L1, discharge, and mass-balance gates against the open-boundary volumes."
+        ),
+        gif_args=(),
+    ),
 )
 
 
@@ -352,6 +367,13 @@ _COLUMN_DESCRIPTIONS = {
     "probe_speed_ref_ms": "Reference propagation speeds at probes, in metres per second.",
     "speed_l1_rel": "Relative L1 error of propagation-probe speeds against the reference.",
     "isotropy_excess_m": "Excess radial-front spread beyond the reference isotropy, in metres.",
+    "solver_impl": "Solver backend used for the run.",
+    "steps": "Total solver time steps completed by the run.",
+    "wall_s": "Elapsed wall-clock time of the solver run, in seconds.",
+    "depth_max_abs_m": "Maximum absolute depth error against the reference, in metres.",
+    "q_l1_rel": "Relative L1 discharge error against the reference (max abs m^2/s for lake at rest).",
+    "mass_err_rel": "Volume change minus the net open-boundary volume, relative to the largest of stored, final, and inflowed volume.",
+    "settle_m": "Largest depth change over the last output interval: how far from steady the run ended, in metres.",
 }
 
 

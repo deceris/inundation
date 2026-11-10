@@ -18,7 +18,7 @@ from .solver import (
     _pc_flux,
     _pc_source,
     _pc_update,
-    refuse_momentum_capture,
+    refuse_unrecorded,
 )
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
         g, dt = self._g, self._dry_tol
 
         self._algo_flux_dtbuf = self._mgr.algorithm(
-            self._all_tensors,
+            self._flux_tensors,
             spv["flux_dtbuf"],
             workgroup=wg_e,
             spec_consts=[],
@@ -106,7 +106,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 t_start=t_start,
                 capture_momentum_snapshots=capture_momentum_snapshots,
             )
-        refuse_momentum_capture("async_sync_window", capture_momentum_snapshots)
+        refuse_unrecorded("async_sync_window", capture_momentum_snapshots, self.n_open)
 
         N, E = self.N, self.E
         g, dry_tol = self._g, self._dry_tol

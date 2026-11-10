@@ -39,9 +39,14 @@ repeated runs are bit-identical. The remaining atomics (``atomicMin`` for dt,
 block flag stores) do not depend on order.
 """
 
-import sys
-
-from .flux import FILM_DRAG_GLSL, HLLC_GLSL
+from .flux import (
+    EFT_GLSL,
+    FILM_DRAG_GLSL,
+    HLLC_GLSL,
+    OPEN_BINDINGS,
+    OPEN_FLUX_MASS_GLSL,
+    OPEN_GHOST_GLSL,
+)
 
 # Bindings 0-18 shared by every resident kernel. dt is declared as uint words.
 _BINDINGS = """\
@@ -102,100 +107,6 @@ const uint EF_WORDS = 6u;
 const uint EF_CFL = 5u;
 """
 
-# Open edges: the ghost state beyond edge ``-2 - cR`` and its mass flux. A
-# boundary edge's bed steps are zero, so the ghost needs no reconstruction. Words
-# per edge: condition, then its value (see the docstring of ``open_ghost``).
-_OPEN_BINDINGS = """\
-layout(set=0, binding=19) buffer OPEN   { uint open_u[]; };
-"""
-
-_OPEN_GHOST_GLSL = """\
-const uint OPEN_WORDS = 2u;
-const uint OPEN_WALL = 0u;
-const uint OPEN_FREE = 1u;
-const uint OPEN_NORMAL = 2u;
-const uint OPEN_STAGE = 3u;
-const uint OPEN_INFLOW = 4u;
-const uint OPEN_NEWTON_STEPS = 4u;
-
-uint open_kind(int cR) { return open_u[OPEN_WORDS * uint(-2 - cR)]; }
-float open_value(int cR) { return uintBitsToFloat(open_u[OPEN_WORDS * uint(-2 - cR) + 1u]); }
-
-// Inflow keeps its edge live while dry, or its volume would be lost.
-bool open_forced(int cR) { return cR < -1 && open_kind(cR) == OPEN_INFLOW && open_value(cR) > 0.0; }
-
-// Depth beyond an inflow edge of discharge q per unit width: the root of
-// -q/hG + 2 sqrt(g hG) = unL + 2 cL, the outgoing characteristic. Solved in
-// s = sqrt(hG), where the left side rises and is concave, so Newton from below
-// climbs to the root without passing it; a start above it is halved at worst.
-float inflow_depth(float q, float riemann) {
-    float root_g = sqrt(pc.g);
-    float s = max(pow(q / (2.0 * root_g), 1.0 / 3.0), riemann / (2.0 * root_g));
-    for (uint k = 0u; k < OPEN_NEWTON_STEPS; ++k) {
-        float f  = 2.0 * root_g * s - q / (s * s) - riemann;
-        float df = 2.0 * root_g + 2.0 * q / (s * s * s);
-        s = max(s - f / df, 0.5 * s);
-    }
-    return s * s;
-}
-
-// The state beyond an open edge of condition `kind`, from the cell inside it.
-// `value` is sqrt(S)/n for OPEN_NORMAL, the depth over this cell's bed for
-// OPEN_STAGE and the discharge per unit width for OPEN_INFLOW.
-void ghost_state(uint kind, float value, float hL, float huL, float hvL, float nx_, float ny_,
-                 out float hG, out float huG, out float hvG)
-{
-    float uL = safe_vel(hL, huL);
-    float vL = safe_vel(hL, hvL);
-    float unL = uL * nx_ + vL * ny_;
-    float ut = -uL * ny_ + vL * nx_;
-    float cL = sqrt(pc.g * max(hL, 0.0));
-    float un = -unL;
-    hG = hL;
-    if (kind == OPEN_FREE) {
-        un = abs(unL);
-    } else if (kind == OPEN_NORMAL) {
-        un = value * pow(max(hL, 0.0), 2.0 / 3.0);
-    } else if (kind == OPEN_STAGE) {
-        // A level cannot reach a boundary against supercritical outflow.
-        if (hL < pc.dry_tol || unL < cL) {
-            hG = value;
-            un = unL + 2.0 * (cL - sqrt(pc.g * value));
-        } else {
-            un = unL;
-        }
-    } else if (kind == OPEN_INFLOW && value > 0.0) {
-        hG = inflow_depth(value, unL + 2.0 * cL);
-        un = -value / hG;
-        ut = 0.0;
-    }
-    huG = hG * (un * nx_ - ut * ny_);
-    hvG = hG * (un * ny_ + ut * nx_);
-}
-
-void open_ghost(int cR, float hL, float huL, float hvL, float nx_, float ny_,
-                out float hG, out float huG, out float hvG)
-{
-    ghost_state(open_kind(cR), open_value(cR), hL, huL, hvL, nx_, ny_, hG, huG, hvG);
-}
-
-bool outflow_only(int cR) {
-    uint kind = open_kind(cR);
-    return kind == OPEN_FREE || kind == OPEN_NORMAL;
-}
-
-// Mass flux through a boundary edge: a wall passes none, as FLUX_GLSL explains;
-// outflow conditions never draw water in; inflow carries exactly its discharge.
-float boundary_mass_flux(int cR, float Fh) {
-    if (cR == -1) { return 0.0; }
-    uint kind = open_kind(cR);
-    if (kind == OPEN_FREE || kind == OPEN_NORMAL) { return max(Fh, 0.0); }
-    if (kind == OPEN_STAGE) { return Fh; }
-    if (kind == OPEN_INFLOW) { return -open_value(cR); }
-    return 0.0;
-}
-"""
-
 _FLUX_GHOST_ATOMIC = """\
     if (cR < 0) {
         hR  = hL;
@@ -239,21 +150,6 @@ _FLUX_MASS_ATOMIC = """\
     if (cR < 0) { Fh = 0.0; }
 """
 
-# An outflow-only edge whose flux would draw water in is a wall for that stage:
-# its whole flux, momentum included, is redone against the wall ghost. Zeroing
-# only Fh would leave the inward momentum flux of the outflow ghost in place.
-_FLUX_MASS_GATHER = """\
-    if (cR < -1 && outflow_only(cR) && Fh < 0.0) {
-        ghost_state(OPEN_WALL, 0.0, hL, huL, hvL, nx_, ny_, hR, huR, hvR);
-        face_states(hL, huL, hvL, dzL, hR, huR, hvR, dzR, nx_, ny_,
-                    hLs, hqnL, hqtL, hRs, hqnR, hqtR);
-        hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
-        Fh = 0.0;
-    } else if (cR < 0) {
-        Fh = boundary_mass_flux(cR, Fh);
-    }
-"""
-
 _FLUX_ACCUM_ATOMIC = """\
     atomicAdd(dh[cL],   Fh  * len);
     atomicAdd(dhu[cL],  Fhu * len + SL_g * nx_ * len);
@@ -295,7 +191,7 @@ def _flux_resident(gather: bool) -> str:
         + "\nlayout(local_size_x = 256) in;\n\n"
         + _BINDINGS
         + _ACTIVE_BINDINGS
-        + (_GATHER_BINDINGS + _OPEN_BINDINGS if gather else "")
+        + (_GATHER_BINDINGS + OPEN_BINDINGS if gather else "")
         + """
 layout(push_constant) uniform PC {
     uint  num_edges;
@@ -308,7 +204,7 @@ layout(push_constant) uniform PC {
 
 """
         + HLLC_GLSL
-        + (_OPEN_GHOST_GLSL if gather else "")
+        + (OPEN_GHOST_GLSL if gather else "")
         + """\
 // The corrector reads the predictor state, except in an inactive block: its
 // predictor state was not computed this step and is stale, and the full step
@@ -364,7 +260,7 @@ void main() {
     float Fh, Fhn, Fht, Smax;
     hllc(hLs, hqnL, hqtL, hRs, hqnR, hqtR, Fh, Fhn, Fht, Smax);
 """
-        + (_FLUX_MASS_GATHER if gather else _FLUX_MASS_ATOMIC)
+        + (OPEN_FLUX_MASS_GLSL if gather else _FLUX_MASS_ATOMIC)
         + """
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
@@ -460,40 +356,6 @@ layout(set=0, binding=28) buffer HLO    { float h_lo[];   };
 layout(set=0, binding=29) buffer H1LO   { float h1_lo[];  };
 """
 
-# Knuth's two-sum: s + e == a + b exactly. `precise` keeps a compiler from
-# reassociating the error term away. MoltenVK is the exception: its fast math
-# breaks the transforms with or without the qualifier, so the solver turns fast
-# math off there, and the qualifier alone adds about 50 % per step (0.327 against
-# 0.222 ms on a 32 k wet mesh; 0.210 ms without compensation).
-_EFT_TEMPLATE = """\
-void two_sum(float a, float b, out float s, out float e) {
-    PRECISE float t  = a + b;
-    PRECISE float bb = t - a;
-    PRECISE float err = (a - (t - bb)) + (b - bb);
-    s = t;
-    e = err;
-}
-
-// (hi + loi) + inc as a renormalised pair, clamped at zero. `e += loi` rounds,
-// so the pair is not error-free; the loss is ~ulp(loi), far below the float32
-// flux sums that bound the measured drift.
-void add_compensated(float hi, float loi, float inc, out float h_new, out float lo_new) {
-    float s, e;
-    two_sum(hi, inc, s, e);
-    e += loi;
-    two_sum(s, e, h_new, lo_new);
-    if (h_new < 0.0 || (h_new == 0.0 && lo_new < 0.0)) { h_new = 0.0; lo_new = 0.0; }
-}
-"""
-
-
-def error_free_glsl(platform: str) -> str:
-    """Two-sum kernels for a host platform (``sys.platform``)."""
-    return _EFT_TEMPLATE.replace("PRECISE ", "" if platform == "darwin" else "precise ")
-
-
-_EFT_GLSL = error_free_glsl(sys.platform)
-
 _UPDATE_DEPTH_PLAIN = """\
     float h_raw  = hi  - dti * sdh;
     float h_new = max(h_raw, 0.0);
@@ -558,7 +420,7 @@ layout(push_constant) uniform PC {
 
 """
         + FILM_DRAG_GLSL
-        + (_EFT_GLSL if compensated else "")
+        + (EFT_GLSL if compensated else "")
         + """
 void main() {
     uint i = gl_GlobalInvocationID.x;
@@ -673,7 +535,7 @@ layout(local_size_x = 256) in;
     + _BINDINGS
     + _ACTIVE_BINDINGS
     + _GATHER_BINDINGS
-    + _OPEN_BINDINGS
+    + OPEN_BINDINGS
     + """\
 layout(push_constant) uniform PC {
     uint  num_edges;
@@ -683,7 +545,7 @@ layout(push_constant) uniform PC {
 
 """
     + HLLC_GLSL
-    + _OPEN_GHOST_GLSL
+    + OPEN_GHOST_GLSL
     + """\
 void main() {
     uint eid = gl_GlobalInvocationID.x;
@@ -771,7 +633,7 @@ const uint BLK_ACTIVE = 1u;
 const uint EF_WORDS = 6u;
 
 """
-    + _EFT_GLSL
+    + EFT_GLSL
     + """
 void main() {
     uint stretch = gl_GlobalInvocationID.x;
@@ -824,7 +686,7 @@ layout(push_constant) uniform PC {
 } pc;
 
 """
-    + _EFT_GLSL
+    + EFT_GLSL
     + """
 void main() {
     uint k = gl_GlobalInvocationID.x;
@@ -1033,7 +895,7 @@ layout(local_size_x = 1) in;
 layout(set=0, binding=0) buffer V { float v[]; };
 
 """
-    + _EFT_GLSL
+    + EFT_GLSL
     + """
 void main() {
     float s, e;

@@ -27,7 +27,7 @@ import enum
 import math
 import sys
 import time as _time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import kp
 import numpy as np
@@ -55,7 +55,7 @@ from ..tuning import (
 from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable
 
     from numpy.typing import NDArray
 
@@ -125,8 +125,6 @@ def _pc_cfl_gather(nc: int, cfl: float) -> list[float]:
 # Flag words per block in the active-set buffer: wet, active, forced.
 _BLOCK_FLAG_WORDS = 3
 _BLOCK_FORCED = 2
-# Words per open edge (OPEN_WORDS in the shaders): condition, value.
-_OPEN_WORDS = 2
 # Words per stretch of the tally: out (hi, lo), in (hi, lo).
 _TALLY_WORDS = 4
 _DILATE_WORKGROUP = 64
@@ -159,14 +157,6 @@ class SWESolverGpuResidentBatch(SWESolver):
     # number is the only knob.
     cfl_safety: float = 1.0
 
-    def __init__(
-        self, *args: Any, open_edges: Sequence[NDArray[np.int64]] = (), **kwargs: Any
-    ) -> None:
-        """``open_edges`` holds each open stretch's edges, as indices into ``geom``."""
-        self._open_stretches = [np.asarray(edges, dtype=np.int64) for edges in open_edges]
-        self.open_volume_snapshots: list[NDArray[np.float64]] = []
-        super().__init__(*args, **kwargs)
-
     def _build_tensors(
         self,
         geom: MeshGeometry,
@@ -184,15 +174,11 @@ class SWESolverGpuResidentBatch(SWESolver):
         # touches few blocks. Only the solver's copy is reordered.
         order = edge_order_by_block(geom.edge_cellL, ACTIVE_BLOCK_CELLS)
         sorted_cell_r = geom.edge_cellR[order]
-        open_cell_r = sorted_cell_r.copy()
+        # The base class marks open edges in the solver's (sorted) edge order.
         edge_position = np.empty(geom.E, dtype=np.int64)
         edge_position[order] = np.arange(geom.E)
-        open_edges = edge_position[
-            np.concatenate([np.empty(0, dtype=np.int64), *self._open_stretches])
-        ]
-        self.n_open = int(open_edges.size)
-        open_cell_r[open_edges] = -2 - np.arange(self.n_open, dtype=np.int32)
-        self._open_cells = geom.edge_cellL[order][open_edges]
+        self._open_stretches = [edge_position[edges] for edges in self._open_stretches]
+        open_edges = np.concatenate([np.empty(0, dtype=np.int64), *self._open_stretches])
         sorted_geom = dataclasses.replace(
             geom,
             edge_len=geom.edge_len[order],
@@ -201,7 +187,7 @@ class SWESolverGpuResidentBatch(SWESolver):
             edge_dzL=geom.edge_dzL[order],
             edge_dzR=geom.edge_dzR[order],
             edge_cellL=geom.edge_cellL[order],
-            edge_cellR=open_cell_r,
+            edge_cellR=sorted_cell_r,
         )
         super()._build_tensors(sorted_geom, h0, hu0, hv0, n0)
         # dt slot 0: this step's dt; slot 1: next step's CFL bound (atomicMin).
@@ -260,14 +246,11 @@ class SWESolverGpuResidentBatch(SWESolver):
             *self._gather_extra,
             *self._comp_extra,
         ]
-        # Open edges: (condition, value) words per edge, read where the update
-        # kernels read the clamp mass, and each stretch's edges and tally. Kompute
-        # rejects empty tensors: pad a mesh with no open edges.
+        # Open edges: the base class's (condition, value) words, read where the
+        # update kernels read the clamp mass, and each stretch's edges and tally.
+        # Kompute rejects empty tensors: pad a mesh with no open edges.
         n_stretches = len(self._open_stretches)
         sizes = [edges.size for edges in self._open_stretches]
-        self.t_open = self._mgr.tensor(
-            _f32_bits(np.zeros(_OPEN_WORDS * max(self.n_open, 1), dtype=np.uint32))
-        )
         self.t_open_ptr = self._mgr.tensor(
             _f32_bits(np.r_[0, np.cumsum(sizes, dtype=np.int64)].astype(np.uint32))
         )
@@ -427,8 +410,6 @@ class SWESolverGpuResidentBatch(SWESolver):
             ]
         )
 
-        self._eft_probe_spv = spv["eft_probe"]
-        self._eft_checked = False
         self._source_list_spv = spv["source_resident"]
         self._algo_source_list: kp.Algorithm | None = None
         self._source_count = 0
@@ -469,22 +450,12 @@ class SWESolverGpuResidentBatch(SWESolver):
         A block with an edge that can bring water in from outside stays active
         for as long as these conditions hold.
         """
-        if kinds.size != self.n_open or values.size != self.n_open:
-            raise ValueError(
-                f"expected {self.n_open} open edges, got {kinds.size} kinds and "
-                f"{values.size} values"
-            )
-        words = np.empty(_OPEN_WORDS * self.n_open, dtype=np.uint32)
-        words[0::2] = kinds
-        words[1::2] = values.astype(np.float32).view(np.uint32)
-        self._set_tensor_host_data(self.t_open, _f32_bits(words))
-
+        super().set_open_conditions(kinds, values)
         brings_water = np.isin(kinds, (OPEN_INFLOW, OPEN_STAGE)) & (values > 0.0)
         flags = np.zeros(_BLOCK_FLAG_WORDS * self.n_blocks, dtype=np.uint32)
         forced = self._open_cells[brings_water] // ACTIVE_BLOCK_CELLS
         flags[_BLOCK_FLAG_WORDS * forced + _BLOCK_FORCED] = 1
-        self._set_tensor_host_data(self.t_blocks, _f32_bits(flags))
-        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_open, self.t_blocks])).eval()
+        self._upload(self.t_blocks, _f32_bits(flags))
 
     def download_open_volumes(self) -> NDArray[np.float64]:
         """``(stretches, 2)`` volume [m^3] out of and into the mesh since the start."""
@@ -502,26 +473,6 @@ class SWESolverGpuResidentBatch(SWESolver):
     def download_h_precise(self) -> NDArray[np.float64]:
         """Depth as float64: the committed float32 word plus its low word."""
         return self.download_h().astype(np.float64) + self.download_h_residual().astype(np.float64)
-
-    def _check_error_free_arithmetic(self) -> None:
-        """Refuse to run if the compiler optimised the depth compensation away."""
-        if self._eft_checked:
-            return
-        words = np.array([1.0, 1e-9, 0.0], dtype=np.float32)
-        tensor = self._mgr.tensor(words.copy())
-        algo = self._mgr.algorithm([tensor], self._eft_probe_spv, workgroup=(1, 1, 1))
-        seq = self._mgr.sequence()
-        seq.record(kp.OpTensorSyncDevice([tensor]))
-        seq.record(kp.OpAlgoDispatch(algo))
-        seq.record(kp.OpTensorSyncLocal([tensor]))
-        seq.eval()
-        if float(np.asarray(tensor.data())[2]) != float(words[1]):
-            raise RuntimeError(
-                "error-free arithmetic is broken on this device, so compensated depth would "
-                "leak mass: set MVK_CONFIG_FAST_MATH_ENABLED=0 before any Vulkan instance is "
-                "created, or set compensated = False"
-            )
-        self._eft_checked = True
 
     def download_block_flags(self) -> NDArray[np.uint32]:
         """``(n_blocks, 3)`` active-set flags: wet, active, forced."""

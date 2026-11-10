@@ -57,6 +57,8 @@ ACTIVE_BLOCK_CELLS = 256
 # Backends whose run() returns hu and hv snapshots. The others accept the flag
 # for interface compatibility but return depth only, so the workflow refuses it.
 MOMENTUM_SNAPSHOT_BACKENDS = frozenset({"baseline", "gpu_resident_batch"})
+# Backends whose run() records the volume through each open stretch.
+OPEN_BOUNDARY_BACKENDS = frozenset({"baseline", "gpu_resident_batch"})
 
 # Open boundary condition of an edge; the ``OPEN_*`` constants in the shaders.
 OPEN_WALL = 0

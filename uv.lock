@@ -177,6 +177,9 @@ mesh-parquet = [
     { name = "pyarrow" },
     { name = "shapely" },
 ]
+swashes = [
+    { name = "swashes" },
+]
 viz = [
     { name = "matplotlib" },
     { name = "pillow" },
@@ -198,8 +201,9 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.7" },
     { name = "shapely", marker = "extra == 'mesh-gis'", specifier = ">=2.0" },
     { name = "shapely", marker = "extra == 'mesh-parquet'", specifier = ">=2.0" },
+    { name = "swashes", marker = "extra == 'swashes'", specifier = "==1.5.0" },
 ]
-provides-extras = ["mesh-parquet", "mesh-gis", "viz", "dev"]
+provides-extras = ["mesh-parquet", "mesh-gis", "viz", "swashes", "dev"]
 
 [[package]]
 name = "fonttools"
@@ -661,6 +665,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/41/8a/59e943f7b27904c7756a7b565ffbd55f3841f5cd3d2da2b2b0713c49e488/sly-0.5.tar.gz", hash = "sha256:251d42015e8507158aec2164f06035df4a82b0314ce6450f457d7125e7649024", size = 66702, upload-time = "2022-10-25T14:35:30.592Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/4d/c96d807295183f2360329cd8d8bf5e8072c53d664125b3858c04153f026e/sly-0.5-py3-none-any.whl", hash = "sha256:20485483259eec7f6ba85ff4d2e96a4e50c6621902667fc2695cc8bc2a3e5133", size = 28864, upload-time = "2022-10-25T14:35:28.054Z" },
+]
+
+[[package]]
+name = "swashes"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/41/3778a0f7ce273a900ef9fb29a4f24b20c88501b5efd2a6055559af4b91ff/swashes-1.5.0.tar.gz", hash = "sha256:dac39c32073b20d451e6bc88d8fb69e757d1bb947c91165e7247b7cd8c3ce62c", size = 4284, upload-time = "2025-04-25T17:07:22.631Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/e0/b5cbe17fb44ee0a1ba29faa3540c66023d29ce95c21210659c477d837e70/swashes-1.5.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:03337168c03727573961c221af4e5794ddcbb8dd503b697eec492701149557ca", size = 120392, upload-time = "2025-04-25T17:06:39.855Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/56/4030daf0b769e6bdbb483bcc01d17550b19631ea046a8d18c2f61731b96d/swashes-1.5.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e4566952857d61c96e27c2b02def3e15bb3c6a6a9a70fc98fa977e43bca88b3f", size = 103561, upload-time = "2025-04-25T17:06:41.221Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/2e/988f527c5ebaa29d4e4e6d3b1c27894e9f1ea2304ee35ab54bb65da4bbd2/swashes-1.5.0-cp312-cp312-manylinux_2_12_i686.manylinux2010_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:dfb6b6c0438b55d93508739ca52c1135a3ddf6cec656052d997ce18b2c160571", size = 116479, upload-time = "2025-04-25T17:06:42.841Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/bb/f0a6ddabb4e40167e9aeaaf43cb37adbfe93c0b563d602b6d1dd86e1b4c2/swashes-1.5.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6ec47dee7ef046ef88d4fa2c210b190ee2d99793ad47b021241ff85a12b63f7d", size = 110645, upload-time = "2025-04-25T17:06:43.934Z" },
+    { url = "https://files.pythonhosted.org/packages/27/76/ef555970c79ad5a4f9fddeacd67c8e03a63691d7dbfd8c54ebb2f7bb0617/swashes-1.5.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:14a1d359c9baa8b21ce384180fee21b47e42818c1092d8a7dedd4d2a0158607c", size = 116917, upload-time = "2025-04-25T17:06:45.04Z" },
+    { url = "https://files.pythonhosted.org/packages/85/c8/db82a54d2b95bab313220387eacf708493eef5a7bf2215b71d1ca856f036/swashes-1.5.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:f3ecab7315230186e5a9420ca8776562f02fcface8e738e49b7970cb63894c18", size = 1074845, upload-time = "2025-04-25T17:06:46.757Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/32/5a20dc737b8573be3d425f6d1705ae7181711bd30faa3fc16cfa2fc24c63/swashes-1.5.0-cp312-cp312-musllinux_1_2_i686.whl", hash = "sha256:004052b91055aad5cd7b6c65707d850e1d0f8c544ce38d9a6b3c4770045e413c", size = 1251110, upload-time = "2025-04-25T17:06:48.36Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/ee/f3b1cdbd25a728e9e882ddfb75359b25688df0fe3beb29622910de4b933b/swashes-1.5.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:b38f4bc267322623d25606b3d5850156f9e1ab694230631b3c797eb4d71041b4", size = 1136582, upload-time = "2025-04-25T17:06:50.046Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/d3/58e393e28548d1a4285c6e17db9f54cdcb86492b9f7f92aa10512e114ff1/swashes-1.5.0-cp312-cp312-win32.whl", hash = "sha256:b70403a7a0a1b5529a041d5edbfb81c2c98bb340322b2d737459de97f880a6ce", size = 75842, upload-time = "2025-04-25T17:06:51.241Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/af/47663348201b3ec4b83e4156722b0187bd52c2af01fcdac851c2977580b1/swashes-1.5.0-cp312-cp312-win_amd64.whl", hash = "sha256:50b3ab01e8302fa6d7b416ace39e4eef32488ebb3c703b9dfb8f89da4ce5f180", size = 85717, upload-time = "2025-04-25T17:06:52.572Z" },
 ]
 
 [[package]]

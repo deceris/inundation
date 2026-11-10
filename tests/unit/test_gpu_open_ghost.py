@@ -26,8 +26,7 @@ from inundation.tuning import (
 # this file's first Vulkan instance or every later solver in the process fails.
 from inundation.vulkan import solver as _solver  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from inundation.vulkan.shaders import compile_glsl
-from inundation.vulkan.shaders.flux import HLLC_GLSL
-from inundation.vulkan.shaders.resident import _OPEN_GHOST_GLSL
+from inundation.vulkan.shaders.flux import HLLC_GLSL, OPEN_GHOST_GLSL
 
 from ._fixtures import requires_vulkan
 
@@ -59,7 +58,7 @@ layout(push_constant) uniform PC {
 
 """
     + HLLC_GLSL
-    + _OPEN_GHOST_GLSL
+    + OPEN_GHOST_GLSL
     + """\
 void main() {
     uint k = gl_GlobalInvocationID.x;

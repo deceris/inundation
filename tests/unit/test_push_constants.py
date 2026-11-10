@@ -57,7 +57,7 @@ from inundation.vulkan.shaders import (
 )
 
 # pyright: reportPrivateUsage=false
-from inundation.vulkan.shaders.resident import error_free_glsl
+from inundation.vulkan.shaders.flux import error_free_glsl
 from inundation.vulkan.solver import (
     _pc_cfl_accum,
     _pc_cfl_reduce,
