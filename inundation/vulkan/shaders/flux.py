@@ -437,34 +437,28 @@ void main() {
 )
 
 
-def _flux(dt_field: str, dt_expr: str) -> str:
-    return (
-        "#version 450\n#extension GL_EXT_shader_atomic_float : require\n\n"
-        "layout(local_size_x = 256) in;\n\n"
-        + _BINDINGS
-        + OPEN_BINDINGS
-        + OPEN_VOLUME_BINDINGS
-        + f"""
-layout(push_constant) uniform PC {{
+# dt arrives as a push constant (host-driven backends).
+FLUX_GLSL = (
+    "#version 450\n#extension GL_EXT_shader_atomic_float : require\n\n"
+    "layout(local_size_x = 256) in;\n\n"
+    + _BINDINGS
+    + OPEN_BINDINGS
+    + OPEN_VOLUME_BINDINGS
+    + """
+layout(push_constant) uniform PC {
     uint  num_edges;
-    float {dt_field};
+    float dt;
     float g;
     float dry_tol;
     float cfl_number;
     float stage;
-}} pc;
+} pc;
 
-#define DT ({dt_expr})
+#define DT (pc.dt)
 
 """
-        + HLLC_GLSL
-        + OPEN_GHOST_GLSL
-        + EFT_GLSL
-        + _FLUX_MAIN
-    )
-
-
-# dt arrives as a push constant (host-driven backends).
-FLUX_GLSL = _flux("dt", "pc.dt")
-# dt lives in DTBUF (device-side CFL backends).
-FLUX_DTBUF_GLSL = _flux("dt_unused", "dt_buf[0]")
+    + HLLC_GLSL
+    + OPEN_GHOST_GLSL
+    + EFT_GLSL
+    + _FLUX_MAIN
+)

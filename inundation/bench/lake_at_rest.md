@@ -43,7 +43,6 @@ timed perf benchmark):
 
 - `fixed_dt_batch_barrier` — production reference (default).
 - `gpu_resident_batch` — fully GPU-resident.
-- `fixed_dt_batch` — known to race; not a correctness reference.
 
 ## Running
 
@@ -60,8 +59,8 @@ just benchmark-lake --flat-bed --hash
 
 ### Key flags
 
-- `--backend` — `fixed_dt_batch_barrier` (default), `gpu_resident_batch`,
-  `fixed_dt_batch`, or `all`.
+- `--backend` — `fixed_dt_batch_barrier` (default), `gpu_resident_batch`, or
+  `all`.
 - `--variant` — `A`, `B`, or `all`.
 - `--friction` — `minimal`, `production`, or `all`.
 - `--flat-bed` — zb = 0 everywhere; isolates a bed-slope/well-balance defect

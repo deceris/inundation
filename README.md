@@ -395,7 +395,6 @@ Select a backend with `WorkflowConfig.solver_impl`:
 | `gpu_resident_batch` | Default. Time, dt and the active set stay on the device; deterministic flux sums; compensated depth. Constant per-phase sources. |
 | `fixed_dt_batch_barrier` | Host-driven reference with explicit dispatch barriers, for correctness comparisons. |
 | `baseline` | One host synchronisation per dispatch; debugging only. |
-| `device_cfl` | GPU-side CFL resolution with a host-driven timestep loop. |
 
 `gpu_resident_batch` keeps simulated time as an integer tick count (2⁻²⁰ s),
 so every output lands exactly on its time. Its depth is an exact float32 pair
@@ -404,10 +403,8 @@ which keeps the volume balance exact up to the positivity clamp;
 `WorkflowConfig.deterministic` (default on) makes repeat runs bit-identical
 on one device and driver.
 
-The remaining implementations are retained for benchmark and advanced
-comparison use. `fixed_dt_batch` raced (no barriers between dependent
-dispatches) and refuses to run. Validate backend behavior on the target
-Vulkan driver before using a performance-oriented path in production.
+The other two are references for correctness comparisons. Validate backend
+behavior on the target Vulkan driver before using either in production.
 
 `hu_final` and `hv_final` are needed to write a complete warm-start state.
 Momentum snapshots require `capture_momentum_snapshots=True` on

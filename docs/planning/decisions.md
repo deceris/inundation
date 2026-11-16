@@ -295,3 +295,14 @@ still refuse open boundaries. SWASHES is compared against the reference
 binary, not a port of its formulas: the binary is the published reference, so
 a port would add code that itself needs validating. Evidence:
 [`31-swashes/results.md`](../implementation/31-swashes/results.md).
+
+## Backends: three kept, four deleted
+
+`solver_impl` is `gpu_resident_batch`, `fixed_dt_batch_barrier` or `baseline`.
+`batched_submit`, `async_sync_window` and `device_cfl` gave wrong answers on
+every radial dam-break run (no compute barriers between dependent dispatches)
+and nothing depended on them; `fixed_dt_batch` only refused to run. Repairing
+them was rejected: `gpu_resident_batch` already does device CFL and batched
+submission correctly, and the barrier and baseline backends are the two
+independent references. Their dtbuf and CFL-resolve shaders went with them.
+Evidence: [`32-backend-pruning/`](../implementation/32-backend-pruning/results.md).

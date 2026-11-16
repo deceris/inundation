@@ -319,10 +319,7 @@ def main() -> None:
         "--backend",
         choices=[*list(BACKENDS), "all"],
         default="fixed_dt_batch_barrier",
-        help=(
-            "solver backend (fixed_dt_batch_barrier is the barrier reference; the "
-            "unbarriered fixed_dt_batch raced and refuses to run)"
-        ),
+        help="solver backend (fixed_dt_batch_barrier is the barrier reference)",
     )
     parser.add_argument(
         "--variant",

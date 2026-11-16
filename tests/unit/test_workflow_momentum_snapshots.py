@@ -27,13 +27,7 @@ f 1 2 5 4
 f 2 3 6 5
 """
 
-UNSUPPORTED = (
-    "async_sync_window",
-    "batched_submit",
-    "device_cfl",
-    "fixed_dt_batch",
-    "fixed_dt_batch_barrier",
-)
+UNSUPPORTED = ("fixed_dt_batch_barrier",)
 
 
 def _config(**overrides: Any) -> WorkflowConfig:

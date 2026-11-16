@@ -46,11 +46,7 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
-    from .vulkan.async_sync_window import SWESolverAsyncSyncWindow
     from .vulkan.baseline import SWESolverBaseline
-    from .vulkan.batched_submit import SWESolverBatchedSubmit
-    from .vulkan.device_cfl import SWESolverDeviceCfl
-    from .vulkan.fixed_dt_batch import SWESolverFixedDtBatch
     from .vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
     from .vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
@@ -188,10 +184,6 @@ class WorkflowConfig:
     output_every_steps: int | None = None
     solver_impl: Literal[
         "baseline",
-        "batched_submit",
-        "device_cfl",
-        "async_sync_window",
-        "fixed_dt_batch",
         "fixed_dt_batch_barrier",
         "gpu_resident_batch",
     ] = "gpu_resident_batch"
@@ -215,15 +207,7 @@ class WorkflowConfig:
             raise ValueError(f"steps_per_graph must be positive, got {self.steps_per_graph}")
         if self.output_every_steps is not None and self.output_every_steps <= 0:
             raise ValueError(f"output_every_steps must be positive, got {self.output_every_steps}")
-        if self.solver_impl not in {
-            "baseline",
-            "batched_submit",
-            "device_cfl",
-            "async_sync_window",
-            "fixed_dt_batch",
-            "fixed_dt_batch_barrier",
-            "gpu_resident_batch",
-        }:
+        if self.solver_impl not in {"baseline", "fixed_dt_batch_barrier", "gpu_resident_batch"}:
             raise ValueError(f"unsupported solver_impl: {self.solver_impl}")
         if self.capture_momentum_snapshots and self.solver_impl not in MOMENTUM_SNAPSHOT_BACKENDS:
             raise ValueError(
@@ -668,14 +652,7 @@ class SWEWorkflow:
         self.face_offsets: NDArray[np.int32] | None = None
         self.zb_from_file: NDArray[np.float32] | None = None
         self.solver: (
-            SWESolverBaseline
-            | SWESolverBatchedSubmit
-            | SWESolverDeviceCfl
-            | SWESolverAsyncSyncWindow
-            | SWESolverFixedDtBatch
-            | SWESolverFixedDtBatchBarrier
-            | SWESolverGpuResidentBatch
-            | None
+            SWESolverBaseline | SWESolverFixedDtBatchBarrier | SWESolverGpuResidentBatch | None
         ) = None
 
     def prepare(self) -> None:
@@ -799,20 +776,12 @@ class SWEWorkflow:
             if n_loaded is not None:
                 n0 = n_loaded
 
-        from .vulkan.async_sync_window import SWESolverAsyncSyncWindow
         from .vulkan.baseline import SWESolverBaseline
-        from .vulkan.batched_submit import SWESolverBatchedSubmit
-        from .vulkan.device_cfl import SWESolverDeviceCfl
-        from .vulkan.fixed_dt_batch import SWESolverFixedDtBatch
         from .vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
         from .vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
         solver_cls_by_impl = {
             "baseline": SWESolverBaseline,
-            "batched_submit": SWESolverBatchedSubmit,
-            "device_cfl": SWESolverDeviceCfl,
-            "async_sync_window": SWESolverAsyncSyncWindow,
-            "fixed_dt_batch": SWESolverFixedDtBatch,
             "fixed_dt_batch_barrier": SWESolverFixedDtBatchBarrier,
             "gpu_resident_batch": SWESolverGpuResidentBatch,
         }

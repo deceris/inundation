@@ -42,13 +42,11 @@ from inundation.vulkan.shaders import (
     CFL_EDGE_GATHER_GLSL,
     CFL_GATHER_GLSL,
     CFL_REDUCE_GLSL,
-    FLUX_DTBUF_GLSL,
     FLUX_GLSL,
     FLUX_RESIDENT_GATHER_GLSL,
     FLUX_RESIDENT_GLSL,
     SOURCE_RESIDENT_GLSL,
     STEP_CONTROL_GLSL,
-    UPDATE_DTBUF_GLSL,
     UPDATE_GLSL,
     UPDATE_RESIDENT_COMP_GLSL,
     UPDATE_RESIDENT_GATHER_COMP_GLSL,
@@ -145,7 +143,6 @@ class TestUpdatePushConstants:
         "glsl",
         [
             UPDATE_GLSL,
-            UPDATE_DTBUF_GLSL,
             UPDATE_RESIDENT_GLSL,
             UPDATE_RESIDENT_GATHER_GLSL,
             UPDATE_RESIDENT_COMP_GLSL,
@@ -186,9 +183,7 @@ class TestUpdatePushConstants:
 
 
 class TestFluxPushConstants:
-    @pytest.mark.parametrize(
-        "glsl", [FLUX_GLSL, FLUX_DTBUF_GLSL, FLUX_RESIDENT_GLSL, FLUX_RESIDENT_GATHER_GLSL]
-    )
+    @pytest.mark.parametrize("glsl", [FLUX_GLSL, FLUX_RESIDENT_GLSL, FLUX_RESIDENT_GATHER_GLSL])
     def test_matches_the_shader_struct(self, glsl: str) -> None:
         emitted = _pc_flux(int(NUM_ELEMENTS), DT, G, DRY_TOL, CFL, int(STAGE))
         assert emitted == expected_layout(glsl)
@@ -272,9 +267,7 @@ class TestResidentPushConstants:
 
 ALL_SHADERS = [
     FLUX_GLSL,
-    FLUX_DTBUF_GLSL,
     UPDATE_GLSL,
-    UPDATE_DTBUF_GLSL,
     CFL_ACCUM_GLSL,
     CFL_REDUCE_GLSL,
     FLUX_RESIDENT_GLSL,

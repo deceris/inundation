@@ -86,7 +86,7 @@ wetting/drying artifact. Determinism is tolerance-based, not bit-exact
 ## Backends
 
 Default backend is `gpu_resident_batch`. Available Vulkan implementations are
-`fixed_dt_batch_barrier`, `gpu_resident_batch`, and `fixed_dt_batch`. The release
+`fixed_dt_batch_barrier` and `gpu_resident_batch`. The release
 is a pure initial condition, so every backend stays on its GPU-resident path.
 
 ## Running

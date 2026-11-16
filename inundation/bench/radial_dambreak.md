@@ -53,7 +53,7 @@ grid the circular front is slightly faster along the axes than the diagonals
 Same policy as the 1D case: default is `gpu_resident_batch` on MoltenVK.
 The host-CFL-readback `fixed_dt_batch_barrier` does not develop the wave under
 MoltenVK, so it is opt-in via `--backends` where supported. Available:
-`fixed_dt_batch_barrier`, `gpu_resident_batch`, `fixed_dt_batch`.
+`fixed_dt_batch_barrier`, `gpu_resident_batch`.
 
 ## Running
 

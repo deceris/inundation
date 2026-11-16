@@ -15,8 +15,8 @@ Simulated time is a uint64 tick count (2^-20 s) in the control block that
 2^24, so ``float(ticks) * 2^-20`` is exact and the clock advances by exactly
 the dt the physics used.
 
-Push-constant structs of the flux and update kernels match the ``dtbuf``
-variants field for field, so ``_pc_flux`` and ``_pc_update`` drive both.
+Push-constant structs of the flux and update kernels match the host-driven
+ones field for field, so ``_pc_flux`` and ``_pc_update`` drive both.
 
 Active set: cells are grouped in blocks of 256 (one cell workgroup, ``i >> 8``)
 with two flag words each in binding 20: ``wet`` (a cell is wet or still has

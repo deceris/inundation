@@ -49,7 +49,7 @@ not fixed across dispatches. A healthy run reproduces to ~4e-7 relative.
 Default backend is `gpu_resident_batch` on MoltenVK (macOS host). The
 host-CFL-readback `fixed_dt_batch_barrier` does not develop the wave under
 MoltenVK, so it is opt-in via `--backends` where supported. Available:
-`fixed_dt_batch_barrier`, `gpu_resident_batch`, `fixed_dt_batch`.
+`fixed_dt_batch_barrier`, `gpu_resident_batch`.
 
 ## Running
 

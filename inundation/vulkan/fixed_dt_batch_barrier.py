@@ -1,19 +1,12 @@
-"""Option #4 SWE solver with explicit compute barriers between batched dispatches.
+"""Host-driven SWE solver that batches fixed-dt steps between CFL checks.
 
-Fixes a missing-synchronization hazard in ``SWESolverFixedDtBatch``: that class
-chains many ``flux``/``update``/``cfl_accum``/``cfl_reduce`` dispatches into a
-single Kompute sequence with one ``eval()`` per batch, but never inserts a
-``kp.OpComputeBarrier`` between dispatches that write a storage buffer
-(``dh``/``dhu``/``dhv`` via ``atomicAdd``) and the very next dispatch that reads
-it. Without a barrier, Kompute/Vulkan does not guarantee the write is visible
-to the next shader invocation, producing a race that reproduces even on a
-flat-bed, still-water case (no scheme/bed-slope cause needed) and is
-non-deterministic run to run. See ``LAKE_AT_REST_BASELINE_RESULTS.md`` §6.
-
-``SWESolverGpuResidentBatch`` (Option #5) already demonstrates the correct
-barrier placement for this dispatch chain; this class mirrors that pattern
-while keeping Option #4's host-driven CFL readback and CPU-side early-exit
-guard, so it is a minimal, behavior-preserving fix rather than a rewrite.
+Many ``flux``/``update``/``cfl_accum``/``cfl_reduce`` dispatches are chained
+into a single Kompute sequence with one ``eval()`` per batch, with a
+``kp.OpComputeBarrier`` between every dispatch that writes a storage buffer
+(``dh``/``dhu``/``dhv`` via ``atomicAdd``) and the next one that reads it.
+Without the barrier Vulkan does not guarantee the write is visible to the next
+shader invocation; the unbarriered predecessors raced and were deleted
+(``docs/planning/decisions.md``).
 """
 # pyright: reportMissingImports=false,reportPrivateUsage=false,reportUnknownArgumentType=false,reportUnknownMemberType=false,reportUnknownVariableType=false,reportUnusedExpression=false
 
@@ -27,8 +20,8 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .fixed_dt_batch import SWESolverFixedDtBatch
 from .solver import (
+    SWESolver,
     _pc_cfl_accum,
     _pc_cfl_reduce,
     _pc_flux,
@@ -50,11 +43,11 @@ from ..tuning import (
 )
 
 
-class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
-    """Option #4 batching with explicit compute barriers between dispatches."""
+class SWESolverFixedDtBatchBarrier(SWESolver):
+    """Fixed-dt batching with explicit compute barriers between dispatches."""
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        """Build Option #4 algorithms, then precompute the barrier ops they need."""
+        """Build the base algorithms, then precompute the barrier ops they need."""
         super()._build_algorithms(spv)
         self._barrier_cfl = kp.OpComputeBarrier([self.t_cfl_scratch, self.t_dtbuf])
         self._barrier_flux = kp.OpComputeBarrier([self.t_dh, self.t_dhu, self.t_dhv])

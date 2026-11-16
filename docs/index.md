@@ -29,3 +29,4 @@
 - [`28-coordinate-origin/`](implementation/28-coordinate-origin/)
 - [`29-open-boundaries/`](implementation/29-open-boundaries/)
 - [`31-swashes/`](implementation/31-swashes/)
+- [`32-backend-pruning/`](implementation/32-backend-pruning/)

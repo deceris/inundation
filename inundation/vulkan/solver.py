@@ -98,7 +98,7 @@ def _pc_cfl_reduce(nc: int, g: float, dry_tol: float, cfl: float) -> list[float]
 
 
 def _pc_source(nc: int, dt: float) -> list[float]:
-    """Host-driven source kernels: {num_cells, dt} (dt unused by the dtbuf variant)."""
+    """Host-driven source kernel: {num_cells, dt}."""
     return [uint_as_float_bits(nc), float(dt)]
 
 
@@ -350,28 +350,15 @@ class SWESolver:
         )
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
-        """Build the GPU source kernel.
-
-        Handles both the base pattern (``_source_spv``, ``[t_h, t_source]``) and
-        the dtbuf subclass pattern (``_source_dtbuf_spv``,
-        ``[*_all_tensors, t_source_dtbuf]``) — subclasses that set
-        ``_source_dtbuf_spv`` in ``_build_algorithms`` get the dtbuf variant
-        automatically.
-        """
+        """Build the GPU source kernel over ``[t_h, t_source]``."""
         N = self.N
         _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
-        has_dt = hasattr(self, "_source_dtbuf_spv")
-        source_spv = getattr(self, "_source_dtbuf_spv" if has_dt else "_source_spv", None)
+        source_spv = getattr(self, "_source_spv", None)
         if source_spv is None:
-            msg = "No source SPV found — set _source_spv or _source_dtbuf_spv in _build_algorithms"
-            raise RuntimeError(msg)
+            raise RuntimeError("No source SPV found — set _source_spv in _build_algorithms")
         source_tensor = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
-        if has_dt:
-            self.t_source_dtbuf = source_tensor
-            self._source_tensors = [*self._all_tensors, source_tensor]
-        else:
-            self.t_source = source_tensor
-            self._source_tensors = [self.t_h, source_tensor]
+        self.t_source = source_tensor
+        self._source_tensors = [self.t_h, source_tensor]
         self._mgr.sequence().record(kp.OpTensorSyncDevice([source_tensor])).eval()
         self._algo_source = self._mgr.algorithm(
             self._source_tensors,

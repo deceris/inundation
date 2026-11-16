@@ -1,5 +1,5 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false
-"""Backend selection: the default is the validated fast path, the racy one is closed."""
+"""Backend selection: the default is the validated fast path."""
 
 from __future__ import annotations
 
@@ -23,50 +23,22 @@ def test_workflow_defaults_to_the_resident_backend() -> None:
 
 
 @requires_vulkan
-def test_unbarriered_fixed_dt_batch_refuses_to_run() -> None:
-    # It recorded dependent dispatches without compute barriers and raced
-    # (docs/planning/decisions.md); the barrier subclass is the reference.
-    from inundation.vulkan.fixed_dt_batch import SWESolverFixedDtBatch
-    from inundation.workflow import _compile_solver_shaders
-
-    grid = valley_grid()
-    zeros = np.zeros(grid.N, dtype=np.float32)
-    solver = SWESolverFixedDtBatch(
-        grid,
-        _compile_solver_shaders(),
-        dam(grid),
-        zeros,
-        zeros,
-        np.full(grid.N, MANNING, np.float32),
-    )
-    with pytest.raises(RuntimeError, match="barrier"):
-        run(solver, 1.0)
-
-
-@requires_vulkan
-@pytest.mark.parametrize(
-    "module",
-    ["async_sync_window", "batched_submit", "device_cfl", "fixed_dt_batch_barrier"],
-)
 @pytest.mark.parametrize(
     ("open_edges", "kwargs", "match"),
     [((), {"capture_momentum_snapshots": True}, "momentum"), (None, {}, "open-boundary")],
     ids=["momentum", "open"],
 )
-def test_host_backends_refuse_what_they_do_not_record(
-    module: str, open_edges: Any, kwargs: dict[str, Any], match: str
+def test_barrier_backend_refuses_what_it_does_not_record(
+    open_edges: Any, kwargs: dict[str, Any], match: str
 ) -> None:
-    import importlib
-
+    from inundation.vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
     from inundation.workflow import _compile_solver_shaders
 
-    solvers = importlib.import_module(f"inundation.vulkan.{module}")
-    cls = next(getattr(solvers, n) for n in solvers.__all__ if n.startswith("SWESolver"))
     grid = valley_grid()
     zeros = np.zeros(grid.N, dtype=np.float32)
     if open_edges is None:
         open_edges = [np.flatnonzero(grid.edge_cellR == -1)[:1]]
-    solver = cls(
+    solver = SWESolverFixedDtBatchBarrier(
         grid,
         _compile_solver_shaders(),
         dam(grid),

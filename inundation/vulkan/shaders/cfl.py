@@ -127,54 +127,6 @@ void main() {
 
 """
 
-CFL_RESOLVE_GLSL = """\
-#version 450
-
-layout(local_size_x = 1) in;
-
-layout(set=0, binding=0)  buffer H      { float h[];      };
-layout(set=0, binding=1)  buffer HU     { float hu[];     };
-layout(set=0, binding=2)  buffer HV     { float hv[];     };
-layout(set=0, binding=3)  buffer EDZ    { float edz[];    };
-layout(set=0, binding=4)  buffer AREA   { float area[];   };
-layout(set=0, binding=5)  buffer ELEN   { float elen[];   };
-layout(set=0, binding=6)  buffer ENX    { float enx[];    };
-layout(set=0, binding=7)  buffer ENY    { float eny[];    };
-layout(set=0, binding=8)  buffer ECL    { int   ecL[];    };
-layout(set=0, binding=9)  buffer ECR    { int   ecR[];    };
-layout(set=0, binding=10) buffer DH     { float dh[];     };
-layout(set=0, binding=11) buffer DHU    { float dhu[];    };
-layout(set=0, binding=12) buffer DHV    { float dhv[];    };
-layout(set=0, binding=13) buffer H1     { float h1[];     };
-layout(set=0, binding=14) buffer HU1    { float hu1[];    };
-layout(set=0, binding=15) buffer HV1    { float hv1[];    };
-layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
-layout(set=0, binding=17) buffer DTBUF  { uint  dt_buf_u[]; };
-layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
-
-layout(push_constant) uniform PC {
-    float dt_prev;
-    float dt_cap;
-    float cfl_safety;
-    float _pad0;
-    float _pad1;
-} pc;
-
-void main() {
-    float dt_raw = uintBitsToFloat(dt_buf_u[0]);
-    float dt_new;
-    if (dt_raw < 1e-10) {
-        dt_new = 0.0;
-    } else if (dt_raw < 1e10) {
-        dt_new = min(dt_raw * pc.cfl_safety, pc.dt_cap);
-    } else {
-        dt_new = min(pc.dt_prev, pc.dt_cap);
-    }
-    dt_buf_u[0] = floatBitsToUint(dt_new);
-}
-
-"""
-
 DT_RESET_GLSL = """\
 #version 450
 

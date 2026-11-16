@@ -34,17 +34,16 @@ DEFAULT_MESH_PATH = (
 )
 DEFAULT_OUTPUT_ROOT = ".tmp/inundation-metal-bench"
 AVAILABLE_SOLVER_IMPLS = (
-    "batched_submit",
-    "async_sync_window",
+    "fixed_dt_batch_barrier",
     "gpu_resident_batch",
 )
-DEFAULT_SOLVER_IMPLS = ("batched_submit", "gpu_resident_batch")
-ComparedSolver = Literal["batched_submit", "async_sync_window", "gpu_resident_batch"]
+DEFAULT_SOLVER_IMPLS = AVAILABLE_SOLVER_IMPLS
+SolverImpl = Literal["baseline", "fixed_dt_batch_barrier", "gpu_resident_batch"]
 
 
 def _run_once(
     mesh_path: Path,
-    solver_impl: Literal["baseline", "batched_submit", "async_sync_window", "gpu_resident_batch"],
+    solver_impl: SolverImpl,
     run_index: int,
     solver_progress: bool,
     phase_duration_s: float,
@@ -81,7 +80,7 @@ def _run_once(
 
 def _run_group(
     mesh_path: Path,
-    solver_impl: Literal["baseline", "batched_submit", "async_sync_window", "gpu_resident_batch"],
+    solver_impl: SolverImpl,
     repeats: int,
     warmup: int,
     output_dir: Path,
@@ -284,17 +283,6 @@ def main() -> int:
         solver_det[solver_impl] = assert_deterministic(runs)
         solver_inv[solver_impl] = all_invariants_ok(runs)
 
-    batched_submit_runs = solver_runs.get("batched_submit")
-    batched_submit_median = solver_medians.get("batched_submit")
-    parity: dict[str, tuple[bool, str]] = {}
-    if batched_submit_runs is not None:
-        for solver_impl, runs in solver_runs.items():
-            if solver_impl == "batched_submit":
-                continue
-            parity[f"batched_submit_vs_{solver_impl}"] = compare_fingerprints_exact(
-                batched_submit_runs[0], runs[0]
-            )
-
     baseline_det_ok = None
     baseline_det_reason = None
     baseline_inv_ok = None
@@ -340,18 +328,7 @@ def main() -> int:
         "solver_deterministic_reason": {key: value[1] for key, value in sorted(solver_det.items())},
         "solver_invariants_ok": {key: value[0] for key, value in sorted(solver_inv.items())},
         "solver_invariants_reason": {key: value[1] for key, value in sorted(solver_inv.items())},
-        "batched_submit_parity": {key: value[0] for key, value in sorted(parity.items())},
-        "batched_submit_parity_reason": {key: value[1] for key, value in sorted(parity.items())},
         "median_wall_seconds": solver_medians,
-        "speedup_vs_batched_submit": {
-            key: (
-                batched_submit_median / value
-                if batched_submit_median is not None and value > 0
-                else None
-            )
-            for key, value in sorted(solver_medians.items())
-            if key != "batched_submit"
-        },
         "include_baseline": args.include_baseline,
         "baseline_deterministic": baseline_det_ok,
         "baseline_deterministic_reason": baseline_det_reason,
@@ -373,8 +350,6 @@ def main() -> int:
 
     has_fail = any(not value[0] for value in solver_det.values())
     has_fail = has_fail or any(not value[0] for value in solver_inv.values())
-    if args.require_bitwise_parity:
-        has_fail = has_fail or any(not value[0] for value in parity.values())
     if args.include_baseline:
         has_fail = has_fail or (baseline_det_ok is not True)
         has_fail = has_fail or (baseline_inv_ok is not True)

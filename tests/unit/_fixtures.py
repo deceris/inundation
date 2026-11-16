@@ -61,11 +61,7 @@ requires_vulkan = pytest.mark.skipif(
 )
 
 _SOLVER_CLASS_BY_MODULE = {
-    "inundation.vulkan.async_sync_window": "SWESolverAsyncSyncWindow",
     "inundation.vulkan.baseline": "SWESolverBaseline",
-    "inundation.vulkan.batched_submit": "SWESolverBatchedSubmit",
-    "inundation.vulkan.device_cfl": "SWESolverDeviceCfl",
-    "inundation.vulkan.fixed_dt_batch": "SWESolverFixedDtBatch",
     "inundation.vulkan.fixed_dt_batch_barrier": "SWESolverFixedDtBatchBarrier",
     "inundation.vulkan.gpu_resident_batch": "SWESolverGpuResidentBatch",
 }
